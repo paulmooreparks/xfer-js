@@ -19,7 +19,8 @@ Written 2026-10-18. Decisions made during implementation are recorded in section
 ```
 xfer-js/
   package.json
-  tsconfig.json
+  tsconfig.json                 src only, no ambient type libraries (enforces non-negotiable 2)
+  tsconfig.node.json            cli, test and root configs, with Node types
   tsdown.config.ts
   biome.json
   vitest.config.ts
@@ -494,11 +495,11 @@ Each of these is a spec change to make in the `xferlang` repository in the same 
 
 ## 13. Build, packaging, CI, release
 
-- **`package.json`:** `"name": "xferlang"`, `"type": "module"`, `"version"` managed by changesets, `"license": "MIT"`, `"engines": { "node": ">=18" }`, `"sideEffects": false`, `"files": ["dist", "README.md", "LICENSE"]`, `"bin": { "xfer": "dist/cli.mjs" }`, `"exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.mjs", "require": "./dist/index.cjs" }, "./package.json": "./package.json" }`, `"main"`, `"module"`, `"types"` set to the same files for older tooling, `"repository"`, `"homepage": "https://xfer.parkscomputing.com"`, `"keywords"`.
-- **TypeScript:** `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `verbatimModuleSyntax`, `target: ES2022`, `lib: ["ES2022"]` (no DOM; `TextDecoder` comes from `lib.dom` or `@types/node`; declare the two globals locally in `src/globals.d.ts` to avoid either).
-- **Build:** `tsdown` producing `dist/index.mjs`, `dist/index.cjs`, `dist/index.d.ts`, `dist/cli.mjs` (ESM only, with the shebang banner). Minified ESM core size measured by `size-limit`; budget 20 KB.
+- **`package.json`:** `"name": "xferlang"`, `"type": "module"`, `"version"` managed by changesets, `"license": "MIT"`, `"engines": { "node": ">=18" }`, `"sideEffects": false`, `"files": ["dist", "README.md", "LICENSE"]`, `"bin": { "xfer": "dist/cli.mjs" }`, `"exports": { ".": { "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }, "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" } }, "./package.json": "./package.json" }`, `"main"`, `"module"`, `"types"` set to the same files for older tooling, `"repository"`, `"homepage": "https://xfer.parkscomputing.com"`, `"keywords"`.
+- **TypeScript:** `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `verbatimModuleSyntax`, `target: ES2022`, `lib: ["ES2022"]` (no DOM; `TextDecoder` comes from `lib.dom` or `@types/node`; declare the two globals locally in `src/globals.d.ts` to avoid either). Two configs: `tsconfig.json` compiles `src` with `types: []` so that using `process`, `Buffer` or any Node module in the core is a compile error (verified 2026-10-18), and `tsconfig.node.json` extends it with Node types for `cli`, `test` and the root config files. `npm run typecheck` runs both.
+- **Build:** `tsdown` producing `dist/index.js` (ESM, since the package is `"type": "module"`), `dist/index.cjs`, `dist/index.d.ts`, `dist/index.d.cts`, and `dist/cli.mjs` (ESM only, with the shebang banner and the executable bit). The core size is measured by `size-limit` as minified bytes with no compression (the stricter reading of the budget); budget 20 kB.
 - **Lint and format:** `biome` with the recommended rules plus `noExplicitAny: error`; `npm run check` runs biome, `tsc --noEmit`, and the tests.
-- **CI (`ci.yml`):** on push and pull request; matrix Node 18, 20, 22, 24 × ubuntu, windows, macos: install with `npm ci`, `npm run check`, `npm run build`, `npm run test:cli`, `size-limit`; plus a `deno` job (`deno test` importing `dist/index.mjs` and running the conformance cases through a small Deno-side runner) and a `bun` job (`bun test` the same). Submodule checked out with `submodules: true`.
+- **CI (`ci.yml`):** on push and pull request; matrix Node 22, 24 × ubuntu, windows, macos: install with `npm ci`, `npm run check`, `npm run build`, `npm run test:cli`, `size-limit`. Node 22 is the floor because the build and test tools require it (tsdown needs 22.18 or later, Vitest 22.12 or later), so the full check cannot run on older Node. Runtime compatibility on older Node is a separate job added in step 9: it builds on Node 24, then runs the built `dist` on Node 18 and 20 with a plain `node:test` runner that executes the conformance cases without Vitest. Also a `deno` job (`deno test` importing `dist/index.js` and running the conformance cases through a small Deno-side runner) and a `bun` job (`bun test` the same). Submodule checked out with `submodules: true`.
 - **Release (`release.yml`):** on push to `main`, changesets opens or updates the version pull request; merging it runs `npm publish --provenance --access public` under an OIDC trusted publisher (no long-lived token), tags `v<version>`, and attaches `CHANGELOG.md` section to the GitHub release. Prereleases use changesets' `pre` mode with tag `next`.
 - **Docs:** README with the thirty-second example, the JSON mapping on the first screen, the API on one page, and links to the spec and the site; `typedoc` to `docs/` published by Pages.
 - **Security:** `SECURITY.md` with the disclosure address; `npm audit` in CI for dev dependencies only (there are no runtime ones).
@@ -528,4 +529,17 @@ Each step is done when its tests pass in CI on every matrix cell.
 
 ## 16. Decisions recorded
 
-(none yet)
+Step 1 (scaffold) was completed on 2026-10-18. The decisions it required, and the places it departs from sections 1 to 15 above:
+
+- **Dev toolchain floor is Node 22.** Current tsdown requires Node `^22.18 || >=24.11` and current Vitest requires `^22.12 || ^24 || >=26`, so the CI matrix in section 13 (Node 18 to 24 running the full check) is not possible. Section 13 now says Node 22 and 24, with an older-runtime job to be added in step 9. The local machine's Node 24.4.1 is below the newest tools' floor (24.11), which npm warns about; the build and checks still ran, but updating Node locally is advised.
+- **Runtime floor is pending Paul.** `engines` is `>=18` as the design says, but nothing verifies it until the step 9 job exists, and Node 18 and Node 20 are both past end of life. Recommendation: keep `>=18` only if the step 9 job passes on 18, otherwise set `>=20`; or decide now to set `>=22` and drop the older-runtime job. The core uses only `TextDecoder`, `TextEncoder`, `Map` and `BigInt`, so 18 should work.
+- **Output file names** follow tsdown's convention for a `"type": "module"` package: `index.js` (ESM), `index.cjs`, `index.d.ts`, `index.d.cts`, and `cli.mjs`. The design had `.mjs` for the ESM core. Sections 13 and the exports map are updated.
+- **Default branch is `master`**, matching the other repositories, not `main` as sections 13 and 14 assume. `.changeset/config.json` has `baseBranch: "master"` and the workflow triggers on both names. If the GitHub repository is created with `main`, change `baseBranch` and the workflow.
+- **`@changesets` config was written by hand,** because `changeset init` is interactive. Schema reference is `@changesets/config@4.0.1`; the changelog generator is the built-in one (no GitHub integration).
+- **Biome 2.5 syntax.** The `recommended` rule field is deprecated; the config uses `"preset": "recommended"`, produced by `biome migrate`.
+- **Pinned dev dependencies** (exact versions in `package.json` and the lockfile): TypeScript 6.0.3, Vitest 5.0.5 and its v8 coverage provider, Biome 2.5.15, tsdown 0.22.2, size-limit 14.2.0 with the small-lib preset, @changesets/cli 3.0.3, @types/node 22.20.5. `fast-check` is added in step 6 and `typedoc` in step 9.
+- **`package.json` is `private: true`** until the first release (step 10), so an accidental publish is impossible. Remove it in that step.
+- **`.gitmodules` records `https://github.com/paulmooreparks/xferlang`,** which does not exist yet; the local clone's configuration points at the local path (`C:/Users/paul/source/repos/xferlang`). Do not run `git submodule sync` until the GitHub repository exists. CI checks out submodules, which needs the spec repository to be readable by the workflow; if it is private, add a token to the checkout step.
+- **`release.yml` is deferred** to step 9 or 10, because it cannot be tested before there is something to publish, and it needs npm trusted publishing configured on the registry side.
+- **Contact in `SECURITY.md`** is paul@parkscomputing.com, taken from the legacy project's README.
+- **The `xferlang` spec repository gained its `LICENSE` file** (the README already claimed MIT).

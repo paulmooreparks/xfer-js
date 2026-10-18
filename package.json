@@ -1,0 +1,68 @@
+{
+  "name": "xferlang",
+  "version": "0.0.0",
+  "private": true,
+  "description": "XferLang 1.0 for JavaScript and TypeScript: a data format with no escape sequences, typed values and line-independent syntax. Parser, canonical writer, JSON mapping and command line tool.",
+  "license": "MIT",
+  "author": "Paul M. Parks",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "xfer": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "size-limit": [
+    {
+      "name": "core, ESM, minified",
+      "path": "dist/index.js",
+      "limit": "20 kB",
+      "gzip": false,
+      "brotli": false
+    }
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:cli": "vitest run test/cli.test.ts --passWithNoTests",
+    "coverage": "vitest run --coverage --passWithNoTests",
+    "check": "npm run lint && npm run typecheck && npm run test",
+    "build": "tsdown",
+    "size": "size-limit",
+    "suite:update": "git submodule update --remote --merge suite"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@changesets/cli": "3.0.3",
+    "@size-limit/preset-small-lib": "14.2.0",
+    "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "5.0.5",
+    "size-limit": "14.2.0",
+    "tsdown": "0.22.2",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  }
+}
