@@ -38,7 +38,7 @@
     {
       "name": "core, ESM, minified",
       "path": "dist/index.js",
-      "limit": "40 kB",
+      "limit": "50 kB",
       "gzip": false,
       "brotli": false
     }

@@ -47,6 +47,11 @@ export const DIAGNOSTICS = {
   XFER0903: { severity: "info", summary: "symbol mapped to JSON string" },
   XFER0904: { severity: "info", summary: "temporal mapped to JSON string" },
   XFER0905: { severity: "warning", summary: "duplicate key in JSON source; last value kept" },
+  XFER0906: { severity: "error", summary: "malformed JSON" },
+  XFER0907: {
+    severity: "error",
+    summary: "JSON string holds a character XferLang cannot represent",
+  },
 } as const satisfies Record<string, DiagnosticInfo>;
 
 export type DiagnosticCode = keyof typeof DIAGNOSTICS;

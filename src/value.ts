@@ -1,4 +1,13 @@
-import type { AnnotationNode, Document, Node, Token, XferValue } from "./types";
+import type {
+  AnnotationNode,
+  Document,
+  Node,
+  Token,
+  XferFractional,
+  XferInteger,
+  XferTemporal,
+  XferValue,
+} from "./types";
 
 export function parseInteger(lexeme: string): bigint {
   const negative = lexeme.startsWith("-");
@@ -183,5 +192,110 @@ export function toValue(tree: Document): XferValue | undefined {
       }
       haveProduced = true;
     }
+  }
+}
+
+export const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+
+/** A fractional lexeme as `digits * 10 ** exponent`; undefined for `inf`, `-inf` and `nan`. */
+export function asDecimal(v: XferFractional): { digits: bigint; exponent: number } | undefined {
+  const m = /^([+-]?)([0-9]*)(?:\.([0-9]*))?(?:[eE]([+-]?[0-9]+))?$/.exec(
+    v.lexeme.replaceAll("_", ""),
+  );
+  if (m === null) {
+    return undefined;
+  }
+  const whole = m[2] ?? "";
+  const fraction = m[3] ?? "";
+  if (whole + fraction === "") {
+    return undefined;
+  }
+  const exponent = Number(m[4] ?? "0") - fraction.length;
+  if (!Number.isSafeInteger(exponent)) {
+    return undefined;
+  }
+  const magnitude = BigInt(whole + fraction);
+  return { digits: m[1] === "-" ? -magnitude : magnitude, exponent };
+}
+
+/** The mantissa and exponent of a finite double: `mantissa * 2 ** exponent`, exactly. */
+function binary(x: number): { mantissa: bigint; exponent: number } {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, x);
+  const bits = view.getBigUint64(0);
+  const biased = Number((bits >> 52n) & 0x7ffn);
+  const fraction = bits & ((1n << 52n) - 1n);
+  const mantissa = biased === 0 ? fraction : fraction | (1n << 52n);
+  const exponent = (biased === 0 ? 1 : biased) - 1075;
+  return { mantissa: bits >> 63n === 1n ? -mantissa : mantissa, exponent };
+}
+
+/**
+ * The number a value denotes as a JavaScript number, and whether that is the value exactly. An
+ * integer is exact when converting it back gives the same integer; a fractional is exact when the
+ * double's exact decimal expansion equals the lexeme. `inf`, `-inf` and `nan` are exact.
+ */
+export function asNumber(v: XferInteger | XferFractional): { value: number; exact: boolean } {
+  if (v.kind === "integer") {
+    const value = Number(v.value);
+    return { value, exact: Number.isFinite(value) && BigInt(value) === v.value };
+  }
+  switch (v.lexeme) {
+    case "inf":
+      return { value: Number.POSITIVE_INFINITY, exact: true };
+    case "-inf":
+      return { value: Number.NEGATIVE_INFINITY, exact: true };
+    case "nan":
+      return { value: Number.NaN, exact: true };
+  }
+  const value = Number(v.lexeme.replaceAll("_", ""));
+  const decimal = asDecimal(v);
+  if (decimal === undefined) {
+    return { value, exact: false };
+  }
+  if (decimal.digits === 0n) {
+    return { value, exact: value === 0 };
+  }
+  if (value === 0 || !Number.isFinite(value)) {
+    return { value, exact: false };
+  }
+  // digits * 10^e == mantissa * 2^x, both sides scaled to integers.
+  const { mantissa, exponent: x } = binary(value);
+  const e = decimal.exponent;
+  const left = decimal.digits * 10n ** BigInt(Math.max(e, 0)) * 2n ** BigInt(Math.max(-x, 0));
+  const right = mantissa * 2n ** BigInt(Math.max(x, 0)) * 10n ** BigInt(Math.max(-e, 0));
+  return { value, exact: left === right };
+}
+
+interface TemporalNamespace {
+  PlainDate: { from(text: string): unknown };
+  PlainTime: { from(text: string): unknown };
+  PlainDateTime: { from(text: string): unknown };
+  Instant: { from(text: string): unknown };
+}
+
+/**
+ * The value as a `Temporal` object (PlainDate, PlainTime, PlainDateTime, or Instant) when the
+ * platform has `Temporal`, else undefined. Never polyfills. Undefined also when `Temporal`
+ * refuses the lexeme, for example one with more than nine fractional digits.
+ */
+export function asTemporal(v: XferTemporal): unknown {
+  const temporal = (globalThis as { Temporal?: TemporalNamespace }).Temporal;
+  if (temporal === undefined) {
+    return undefined;
+  }
+  try {
+    switch (v.kind) {
+      case "date":
+        return temporal.PlainDate.from(v.lexeme);
+      case "time":
+        return temporal.PlainTime.from(v.lexeme);
+      case "local-datetime":
+        return temporal.PlainDateTime.from(v.lexeme);
+      case "datetime":
+        return temporal.Instant.from(v.lexeme);
+    }
+  } catch {
+    return undefined;
   }
 }

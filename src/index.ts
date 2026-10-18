@@ -1,6 +1,10 @@
 export { canonical } from "./canonical";
 export { DIAGNOSTICS } from "./diagnostics";
 export { XferError } from "./error";
+export { fromJson } from "./json/read";
+export { toJson } from "./json/write";
 export { LIMIT_MINIMUMS } from "./limits";
 export { parse, parseValue } from "./parser-entry";
+export { toPlain } from "./plain";
 export type * from "./types";
+export { asDecimal, asNumber, asTemporal } from "./value";

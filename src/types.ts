@@ -33,7 +33,7 @@ export interface Limits {
 }
 
 export interface ParseOptions {
-  /** Values below the specification's minimums are raised to the minimums. */
+  /** Each limit defaults to the specification's minimum; a caller may raise or lower it. */
   readonly limits?: Partial<Limits>;
 }
 

@@ -34,8 +34,19 @@ describe("resolveLimits", () => {
     );
   });
 
-  it("raises a value below the minimum to the minimum", () => {
-    expect(resolveLimits({ depth: 10, runLength: 1, documentBytes: 0 })).toEqual(LIMIT_MINIMUMS);
+  it("accepts a value below the minimum, since the minimums bind only the default", () => {
+    expect(resolveLimits({ depth: 10, runLength: 1, documentBytes: 5 })).toEqual({
+      ...LIMIT_MINIMUMS,
+      depth: 10,
+      runLength: 1,
+      documentBytes: 5,
+    });
+  });
+
+  it("ignores a value that is zero, negative or NaN", () => {
+    expect(resolveLimits({ depth: 0, runLength: -1, documentBytes: Number.NaN })).toEqual(
+      LIMIT_MINIMUMS,
+    );
   });
 
   it("treats a value that is not a usable number as unset", () => {
