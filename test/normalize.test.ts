@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveLimits } from "../src/limits";
 import { normalize } from "../src/normalize";
 import { loadCases } from "./cases.ts";
@@ -64,6 +64,32 @@ describe("normalize, byte input", () => {
     expect(normalize(encode("abcd"), small).text).toBe("abcd");
     expect(rejection(encode("abcde"), small)).toEqual(["XFER0601", 0, 1, 1]);
     expect(rejection(raw(0xff, 0xff, 0xff, 0xff, 0xff), small)).toEqual(["XFER0601", 0, 1, 1]);
+  });
+});
+
+describe("normalize, when the platform decoder fails", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const throwing = (error: Error) =>
+    class {
+      decode(): string {
+        throw error;
+      }
+    };
+
+  it("reports XFER0701 only for the TypeError the Encoding standard defines", () => {
+    vi.stubGlobal("TextDecoder", throwing(new TypeError("bad bytes")));
+    expect(rejection(encode("x"))).toEqual(["XFER0701", 0, 1, 1]);
+  });
+
+  it("reports any other failure as a size problem, not as invalid UTF-8, and does not throw", () => {
+    // What a JavaScript engine does when the decoded text would exceed its maximum string length.
+    vi.stubGlobal("TextDecoder", throwing(new RangeError("Invalid string length")));
+    expect(rejection(encode("x"))).toEqual(["XFER0601", 0, 1, 1]);
+    vi.stubGlobal("TextDecoder", throwing(new Error("anything else")));
+    expect(rejection(encode("x"))).toEqual(["XFER0601", 0, 1, 1]);
   });
 });
 

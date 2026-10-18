@@ -21,6 +21,10 @@ function rejected(code: DiagnosticCode, inputBytes: number, at = ORIGIN): Normal
   return { text: "", diagnostics: [makeDiagnostic(code, at)], inputBytes };
 }
 
+function platformTooLarge() {
+  return makeDiagnostic("XFER0601", ORIGIN, ORIGIN, "larger than this platform can decode");
+}
+
 /** Specification 3.2: every CR LF and every lone CR becomes LF. */
 function lineEndings(text: string): string {
   return text.replace(/\r\n?/g, "\n");
@@ -47,8 +51,14 @@ function normalizeBytes(input: Uint8Array, limits: Limits): Normalized {
   try {
     // ignoreBOM false is the setting that removes a leading byte order mark.
     decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(input);
-  } catch {
-    return rejected("XFER0701", inputBytes);
+  } catch (error) {
+    // The Encoding standard defines a TypeError for bytes that are not UTF-8. Any other failure
+    // is the platform being unable to hold the decoded text, which is a size problem, not an
+    // encoding one; the core reports it rather than throwing.
+    if (error instanceof TypeError) {
+      return rejected("XFER0701", inputBytes);
+    }
+    return { text: "", diagnostics: [platformTooLarge()], inputBytes };
   }
   return { text: lineEndings(decoded), diagnostics: [], inputBytes };
 }

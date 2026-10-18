@@ -261,7 +261,7 @@ The lexer walks the string by code point (`codePointAt`, advancing 1 or 2 UTF-16
 Before each token, collect trivia in order:
 
 - Whitespace: a maximal run of U+0020, U+0009, U+000A, U+000C.
-- Comment: `<` followed by one or more `/`. Let `n` be the slash run (count all consecutive slashes). If `n > limits.runLength`, emit `XFER0604` at the comment start and treat the comment as unterminated for recovery purposes. Then scan forward: at each `/`, measure the maximal slash run `r`; if `r === n` and the character after the run is `>`, the comment ends after `>`; otherwise continue scanning from after the run. If end of text is reached, emit `XFER0104` at the comment start and the comment extends to end of text.
+- Comment: `<` followed by one or more `/`. Let `n` be the slash run (count all consecutive slashes). If `n > limits.runLength`, emit `XFER0604` at the comment start and continue reading the comment normally. Then scan forward: at each `/`, measure the maximal slash run `r`; if `r === n` and the character after the run is `>`, the comment ends after `>`; otherwise continue scanning from after the run. If end of text is reached, emit `XFER0104` at the comment start and the comment extends to end of text.
 
 Trivia is attached as `leading` to the next token (or to `eof`).
 
@@ -285,7 +285,7 @@ After trivia, dispatch on the current code point:
 
 ### 5.3 Repetition string
 
-1. Count the opening run `n` of consecutive `"`. If `n > limits.runLength`: `XFER0604` at the token start, then recover by treating the string as unterminated.
+1. Count the opening run `n` of consecutive `"`. If `n > limits.runLength`: `XFER0604` at the token start, then continue reading the string normally (finding its closer of exactly `n` is linear, and gives better recovery than consuming the rest of the document).
 2. **Empty-string special case:** if `n === 2` and the next character is not `"` (or is end of text), the token is the empty string, length 2.
 3. Otherwise scan forward from after the opening run. At each `"`, measure the maximal run `r`. If `r === n`, the string ends after that run; content is the text between the runs. If `r !== n`, continue from after the run (those quotes are content). At end of text: `XFER0201` at the token start; the token's content is everything after the opener and the token ends at end of text (recovery: the rest of the document is consumed, as the spec allows).
 4. `delimiter = { form: "rep", run: n }`; `content` is a slice (no copying beyond `substring`).
@@ -303,12 +303,13 @@ A hand-written scanner, grammar-driven, never a regex over a "scalar run", becau
 
 Let `s` be the token start. Steps:
 
-1. If the current character is `-`: consume it. If the next three characters are `inf` and the character after them is a terminator (5.7), the token is the keyword `-inf`. Otherwise, if the next character is not a digit, emit `XFER0302` at `s` and recover (5.7).
-2. If the current character is `0` and the next is `x`, `o` or `b`: consume both; scan digits of that radix with the underscore rule (an `_` must be preceded and followed by a digit of the radix). At least one digit is required. Any violation: `XFER0302` at `s`, recover. Result: `integer`.
+1. If the current character is `-`: consume it and note that the token is signed. If the next three characters are `inf`, the token is the keyword `-inf`, and the separation check follows, so `-infinity` reports `XFER0101` at its second `i`. Otherwise, if the next character is not a digit, emit `XFER0302` at `s` and recover (5.7).
+2. If the current character is `0` and the next is `x`, `o` or `b`: consume both; scan digits of that radix with the underscore rule (an `_` must be preceded and followed by a digit of the radix). At least one digit is required. Any violation: `XFER0302` at `s`, recover. Result: `integer`. If the next is `X`, `O` or `B`, emit `XFER0302` at `s` and recover: an uppercase radix prefix is a malformed number, not `0` followed by a separation error.
 3. Otherwise scan a decimal digit run with the underscore rule. Let `d` be the digits (without underscores) and `u` whether any underscore appeared.
-   - If `d` has length > 1 and starts with `0`: `XFER0301` at `s`, recover.
+   - The temporal checks come first, before the leading-zero rule, because a year (`0001`) or an hour (`09`) may begin with `0`; and they apply only when no sign was consumed, because a temporal takes no sign (`-2025-08-01` is the integer `-2025` and a separation error).
    - If the next character is `-` and `d.length === 4` and `!u`: this is a date. Require `-` `DD` `-` `DD` exactly (two digits each). Then, if the next character is `T`: require `HH:MM:SS`, optionally `.` followed by one or more digits, optionally `Z` or `+HH:MM` or `-HH:MM`. Any shape violation: `XFER0304` at `s`, recover. Then validate ranges (5.5.1): violation is `XFER0305` at `s` (the token is still produced, as an `error` token). Kind: `date`, `local-datetime` (no offset) or `datetime` (offset).
    - If the next character is `:` and `d.length === 2` and `!u`: this is a time. Require `:MM:SS` then optional fraction. Violation: `XFER0304`. Validate ranges. Kind: `time`.
+   - Otherwise, if `d` has length > 1 and starts with `0`: `XFER0301` at `s`, recover.
    - If the next character is `.`: require at least one digit after it (underscore rule applies within the fraction digits); else `XFER0302`. Then optional exponent. Kind: `fractional`.
    - If the next character is `e` or `E`: optional `+` or `-`, then at least one digit (underscore rule). Else `XFER0302`. Kind: `fractional`.
    - Otherwise kind: `integer`.
@@ -484,9 +485,9 @@ Tests are generated with `describe`/`it` per stem so a failure names the case.
 
 Each of these is a spec change to make in the `xferlang` repository in the same change as the first implementation commit that depends on it.
 
-1. **Positions are in the normalized text.** Spec 9 says "UTF-8 byte offset" without saying of what. After CR normalization, offsets differ from the input's; the suite's cases are LF so no case is affected, but the rule must be written.
+1. **Positions are in the normalized text.** Spec 9 says "UTF-8 byte offset" without saying of what. After CR normalization, offsets differ from the input's; the suite's cases are LF so no case is affected, but the rule must be written. (Done: spec section 9, commit 55cdffc.)
 2. **A code for malformed JSON in `fromJson`:** `XFER0906`, error, "malformed JSON". The spec's table stops at 0905.
-3. **Leap seconds:** second 60 is accepted, as RFC 3339 permits. Spec 4.6 says "denotes no instant" without listing ranges; list them.
+3. **Leap seconds:** second 60 is accepted, as RFC 3339 permits. Spec 4.6 says "denotes no instant" without listing ranges; list them. (Done: spec 4.6, commit 55cdffc.)
 4. **The head and whitespace:** "first token of the document" should say that leading whitespace is permitted before the head and comments are not.
 5. **Duplicate keys in the value model:** last wins in the tree-to-value projection (the parse is already an error; this only governs tools reading the tree).
 6. **Codes for a malformed annotation and a wrong-typed annotation value.** This design uses `XFER0506` with a distinguishing message; the spec should either confirm that or add `XFER0507` (malformed annotation) and `XFER0508` (annotation value of the wrong type).
@@ -565,3 +566,20 @@ Step 3 (normalize, unicode, diagnostics, limits) was completed on 2026-10-18. No
 - **The size limit is measured on the input as supplied,** before the byte order mark is removed and line endings change, and before decoding, so oversized invalid input reports `XFER0601`.
 - **Limits.** `resolveLimits` treats a value that is below the minimum or not a number (including `NaN`, a string or `null`) as unset, and returns a frozen object. An infinite value is accepted, as "no limit".
 - **Still to add to the specification,** per section 12: `XFER0906` for malformed JSON, and the two annotation codes if the spec wants them. Neither is needed until steps 5 and 7.
+
+**Cold review of step 3 (2026-10-18, a separate Opus agent with no prior context).** Two bugs and two specification problems, all addressed in step 4's commit:
+
+- `normalize` caught every exception as invalid UTF-8, so a valid 512 MiB document (which the engine cannot hold as one string) was reported as `XFER0701`. It now reports `XFER0701` only for the `TypeError` the Encoding standard defines, and reports any other decoding failure as `XFER0601` with "larger than this platform can decode", without throwing. Both paths are tested with a stub decoder. Treating "anything that is not a TypeError" as a size problem is a safety net for a failure the platform does not specify, not a branch the design depends on.
+- `isAdmittedNonAscii` was written as rejections, so `NaN`, a fraction or `undefined` passed as an identifier character. It is now an acceptance (`Number.isInteger` and in range), with tests for those values.
+- `positionAt` now stops at the end of the text and never returns a position after a surrogate pair for an index inside it.
+- The diagnostics-table test now also checks that every line of the spec's table parsed, so a badly formatted new row cannot be skipped on both sides.
+- **Pending Paul:** spec 3.4's minimum of 2^31−1 bytes for document size and token length cannot be met by any JavaScript engine (V8 holds about 2^29 UTF-16 units). See the step 4 entry.
+- The API's severity `"info"` is the spec's "informational". This is a deliberate name, matching common tooling.
+
+Step 4 (lexer) was completed on 2026-10-18, on Opus. Every valid suite document lexes with no diagnostic and is reproduced exactly by its tokens; all 50 invalid cases whose required diagnostics are lexical produce them at the stated positions (so the hand-computed positions in those cases are now verified); and 3,000 seeded random inputs lex without throwing, reproduce exactly, and report every token and trivia position equal to an independent count. The expected-failures list grew to 123 because the suite grew; no case leaves it until the parser exists in step 5, because the conformance runner needs a value and a canonical form.
+
+- **Faults found in the specification and suite, fixed upstream** (xferlang commit 55cdffc, following section 15): spec 4.5 listed `.5` and `+1` as `XFER0302` while section 4 and the suite say `XFER0103`; the temporal ranges were missing from 4.6; the rules for `-inf`, signed temporals, uppercase radix prefixes and lowercase `z` were unstated; section 9 did not say positions are in the normalized text; `530-object-minimal-whitespace` contained `c"x"`, which the separation ruling forbids; four invalid cases were named for the wrong code. Seventeen cases were added.
+- **Faults found in this design, corrected in section 5:** the `-inf` rule required a terminator after `inf`, which contradicted the suite (`-infinity` is `XFER0101` at the second `i`); the leading-zero check came before the temporal check, which would have rejected the year `0001` and the hour `09`; a sign did not prevent a temporal, so `-2025-08-01` would have lexed as a date; an uppercase radix prefix was not handled, which would have reported `0XFF` as `0` plus a separation error instead of `XFER0302`; and a delimiter run over the limit treated the rest of the document as one string, where reading on to the exact closer recovers better.
+- **Hints.** A character people bring from other formats (comma, colon, apostrophe, parenthesis, `+`, a leading point, `~`, `?`) gets a hint in its diagnostic. The hint appears whether the character fails the separation rule (`[ 1, 2 ]`) or cannot begin a token (`( 1 )`).
+- **Pending Paul, blocking two string cases.** The specification's empty-string rule ("exactly two quotes followed by anything other than a quote") contradicts its own `""...""` examples: by that rule `""He said "hello" and left.""` is the empty string followed by `He`. The lexer implements what the suite as written requires (two quotes followed by a terminator are the empty string) in one method, `emptyStringEnds`, until Paul rules.
+- **Pending Paul, the size minimums.** See the review entry above.

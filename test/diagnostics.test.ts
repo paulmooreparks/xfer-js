@@ -40,6 +40,11 @@ describe("DIAGNOSTICS", () => {
       severity: info.severity,
       summary: info.summary,
     }));
+    // Every table row must parse, so a badly formatted new row cannot be skipped on both sides.
+    const tableLines = readFileSync(SPEC, "utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("| XFER"));
+    expect(fromSpec.length).toBe(tableLines.length);
     expect(fromSpec.length).toBeGreaterThan(30);
     expect(fromCode).toEqual(fromSpec);
   });

@@ -28,7 +28,11 @@ export function isWhitespace(cp: number): boolean {
 
 /** A scalar value at or above U+0080 that is not in the excluded list. Surrogates are not scalar values. */
 export function isAdmittedNonAscii(cp: number): boolean {
-  if (cp < 0x80 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+  // Written as an acceptance so that NaN, a fraction or an out-of-range value is rejected, not
+  // let through by failing every rejection test.
+  const scalar =
+    Number.isInteger(cp) && cp >= 0x80 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff);
+  if (!scalar) {
     return false;
   }
   for (const [lo, hi] of EXCLUDED) {

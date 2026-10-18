@@ -27,6 +27,17 @@ describe("positionAt", () => {
     expect(positionAt("a b", 3)).toEqual({ offset: 5, line: 1, column: 4 });
   });
 
+  it("gives the position of the end for an index past the end", () => {
+    expect(positionAt("a", 5)).toEqual({ offset: 1, line: 1, column: 2 });
+    expect(positionAt("", 3)).toEqual(ORIGIN);
+  });
+
+  it("gives the position of a surrogate pair, not after it, for an index inside the pair", () => {
+    expect(positionAt("😀x", 1)).toEqual(ORIGIN);
+    expect(positionAt("a😀x", 2)).toEqual({ offset: 1, line: 1, column: 2 });
+    expect(positionAt("a😀x", 3)).toEqual({ offset: 5, line: 1, column: 3 });
+  });
+
   it("freezes the origin", () => {
     expect(Object.isFrozen(ORIGIN)).toBe(true);
   });

@@ -62,6 +62,16 @@ describe("isAdmittedNonAscii", () => {
     }
   });
 
+  it("rejects values that are not code points at all", () => {
+    // What reading one past the end of a string with codePointAt produces, among others.
+    const notCodePoints = ["abc".codePointAt(3) as number, Number.NaN, -1, 200.5, Infinity];
+    for (const cp of notCodePoints) {
+      expect(isAdmittedNonAscii(cp), String(cp)).toBe(false);
+      expect(isIdentifierStart(cp), String(cp)).toBe(false);
+      expect(isIdentifierContinue(cp), String(cp)).toBe(false);
+    }
+  });
+
   it("admits the code points beside the excluded ranges", () => {
     for (const cp of [
       0x80,
