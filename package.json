@@ -47,7 +47,7 @@
     "lint": "biome check .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "test:cli": "vitest run test/cli.test.ts --passWithNoTests",
+    "test:cli": "vitest run -c vitest.cli.config.ts",
     "coverage": "vitest run --coverage --passWithNoTests",
     "check": "npm run lint && npm run typecheck && npm run test",
     "build": "tsdown",

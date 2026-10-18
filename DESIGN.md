@@ -655,3 +655,7 @@ Review of step 7 (Opus, cold) found six defects, all fixed:
 - **`indent` was unchecked.** It is truncated to a whole number and clamped to 10, as `JSON.stringify` does.
 
 Tests added for each, plus exact-diagnostic-list tests, a Unicode property test, and control-character escaping against `JSON.stringify`.
+
+### Step 8: the CLI
+
+`cli/main.ts` implements section 10 as designed: `validate`, `fmt` (with `--write`), `canon`, `to-json` (`--pretty`, `--stringify-big-ints`), `from-json`, `--json` on every command, `--version`, `--help`. Choices beyond the design: informational diagnostics (`XFER0903`, `XFER0904`) are hidden in the GNU format and shown with `--json`; stdin is shown as `<stdin>` in diagnostics; every file is read before any is processed, so an unreadable file is exit 2 with no partial output; `fmt --write` needs file names; `to-json` still prints its JSON when the only error is an `inf` or `nan` (as the spec says, the output has `null` there) and exits 1; `from-json` and `canon` refuse input that would make `canonical` throw (too deep, too large) with exit 1. `test/cli.test.ts` needs the build, so it has its own config (`vitest.cli.config.ts`, run by `npm run test:cli`) and is excluded from `npm test`, which runs before the build in CI. No separate Opus review was run for this step; it is a thin layer over reviewed library calls, and step 9's smoke tests exercise it again.
