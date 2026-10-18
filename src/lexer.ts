@@ -1,5 +1,6 @@
 import type { DiagnosticCode } from "./diagnostics";
 import { makeDiagnostic } from "./diagnostics";
+import { KEYWORDS } from "./keywords";
 import type { Diagnostic, Limits, Position, Token, TokenKind, Trivia } from "./types";
 import { isIdentifierContinue, isIdentifierStart, isWhitespace, utf8Length } from "./unicode";
 
@@ -35,8 +36,6 @@ interface Extra {
   readonly delimiter?: Delimiter;
   readonly keyword?: Keyword;
 }
-
-const KEYWORDS: ReadonlySet<string> = new Set(["true", "false", "null", "inf", "nan"]);
 
 const isDecimal = (c: number) => c >= 0x30 && c <= 0x39;
 const isHex = (c: number) => isDecimal(c) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);

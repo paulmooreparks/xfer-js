@@ -1,6 +1,6 @@
 import type { AnnotationNode, Document, Node, Token, XferValue } from "./types";
 
-function parseInteger(lexeme: string): bigint {
+export function parseInteger(lexeme: string): bigint {
   const negative = lexeme.startsWith("-");
   const body = (negative ? lexeme.slice(1) : lexeme).replaceAll("_", "");
   // BigInt reads the 0x, 0o and 0b prefixes, which the lexer has already checked are lowercase.
@@ -130,7 +130,9 @@ export function toValue(tree: Document): XferValue | undefined {
   let pending: Node | undefined = tree.root;
   let produced: XferValue | undefined;
   let haveProduced = false;
-  if (pending === undefined) {
+  // Anything after the root is an error by construction, whether the parser reported it as
+  // content after the root or the lexer reported it as malformed.
+  if (pending === undefined || tree.trailing.length > 0) {
     return undefined;
   }
 

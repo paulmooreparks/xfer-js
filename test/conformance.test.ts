@@ -36,7 +36,7 @@ describe("valid documents", () => {
       const result = parse(c.input);
       expect(result.ok, describeDiagnostics(result.diagnostics)).toBe(true);
 
-      expect(canonical(result.tree)).toBe(c.canonical);
+      expect(canonical(result)).toBe(c.canonical);
 
       const actual = toTaggedDocument(result);
       expect(actual).toEqual(c.value);
@@ -46,7 +46,7 @@ describe("valid documents", () => {
 
       const again = parse(c.canonical);
       expect(again.ok, "the canonical form must itself parse").toBe(true);
-      expect(canonical(again.tree), "canonical form must be idempotent").toBe(c.canonical);
+      expect(canonical(again), "canonical form must be idempotent").toBe(c.canonical);
     });
   }
 });

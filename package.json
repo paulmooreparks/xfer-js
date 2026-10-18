@@ -61,6 +61,7 @@
     "@size-limit/preset-small-lib": "14.2.0",
     "@types/node": "22.20.5",
     "@vitest/coverage-v8": "5.0.5",
+    "fast-check": "4.10.2",
     "size-limit": "14.2.0",
     "tsdown": "0.22.2",
     "typescript": "6.0.3",
