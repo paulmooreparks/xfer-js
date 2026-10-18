@@ -644,3 +644,14 @@ Paul's rulings of 2026-10-19 are applied. A caller may lower any parser limit be
 - **`toPlain`** defines object keys with `Object.defineProperty` so `__proto__` is an ordinary key.
 - **Corpus runners** read `to-json.txtar` and `from-json.txtar` from the suite (`test/json-cases.ts`).
 - **Size:** the core is 39.95 kB minified with the JSON code, so the budget is raised to 50 kB, to be tightened in step 9. This is my engineering parameter, not a ruling.
+
+Review of step 7 (Opus, cold) found six defects, all fixed:
+
+- **`fromJson` had no depth limit,** so it could return a value `canonical` refuses to write. It now takes `{ limits }`, applies the depth limit (default 256, empty containers included) and reports `XFER0602` once with no value. The spec gives no JSON-side code for this; I reused the document one. This is my choice, not a ruling.
+- **`toPlain` lost precision silently** for fractionals such as `1e400`. It has a `fractionals: "lexeme"` option, and the doc comment says "number" is lossy and `asNumber` tells whether it was exact.
+- **`asTemporal` changed second 60 to 59.** It now returns undefined for second 60, and the comment says an `Instant` drops the offset.
+- **`asNumber` called an exact zero inexact** when the exponent was not a safe integer. Zero is now handled before the exponent check.
+- **`XFER0905` was reported at a position that depended on the value's type.** It is now reported at the key. To make that possible without a quadratic cursor, `fromJson` collects diagnostics and computes positions at the end in sorted order, so diagnostics come out in position order.
+- **`indent` was unchecked.** It is truncated to a whole number and clamped to 10, as `JSON.stringify` does.
+
+Tests added for each, plus exact-diagnostic-list tests, a Unicode property test, and control-character escaping against `JSON.stringify`.

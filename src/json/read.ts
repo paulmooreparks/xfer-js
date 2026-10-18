@@ -1,5 +1,6 @@
 import { makeDiagnostic } from "../diagnostics";
-import type { Diagnostic, Position, XferValue } from "../types";
+import { resolveLimits } from "../limits";
+import type { Diagnostic, DiagnosticCode, FromJsonOptions, Position, XferValue } from "../types";
 import { utf8Length } from "../unicode";
 
 // Specification 8.2. A JSON reader of our own, because the platform's JSON.parse loses the
@@ -52,6 +53,8 @@ interface Frame {
   readonly entries: Map<string, XferValue>;
   /** Object only: the key waiting for its value. */
   key: string | undefined;
+  /** Object only: the index of the waiting key's opening quote. */
+  keyAt: number;
 }
 
 function isLoneSurrogate(text: string): boolean {
@@ -76,22 +79,51 @@ function isLoneSurrogate(text: string): boolean {
  * Reads JSON text into a value. Malformed JSON gives XFER0906 and no value; a string or key that
  * XferLang cannot hold (U+000D, a lone surrogate) gives XFER0907 and no value, but the rest of the
  * text is still read so that every such string is reported. A duplicate key keeps the last value
- * and gives XFER0905. Iterative, so nesting depth cannot overflow the stack.
+ * and gives XFER0905. Nesting deeper than the depth limit (default 256, as for a document) gives
+ * XFER0602 and no value, because the result could not be written as a document. Iterative, so
+ * nesting depth cannot overflow the stack. Diagnostics are in order of position.
  */
-export function fromJson(text: string): {
+export function fromJson(
+  text: string,
+  options?: FromJsonOptions,
+): {
   readonly value: XferValue | undefined;
   readonly diagnostics: readonly Diagnostic[];
 } {
-  const diagnostics: Diagnostic[] = [];
-  const cursor = new Cursor(text);
+  const depthLimit = resolveLimits(options?.limits).depth;
+  const raw: { code: DiagnosticCode; index: number; detail: string }[] = [];
   let failed = false;
+  let depthReported = false;
   let i = 0;
 
-  const report = (code: "XFER0905" | "XFER0907", at: number, detail: string): void => {
-    const position = cursor.at(at);
-    diagnostics.push(makeDiagnostic(code, position, position, detail));
-    if (code === "XFER0907") {
+  // Positions are computed at the end, in order, so the cursor only ever moves forward.
+  const finish = (): Diagnostic[] => {
+    const cursor = new Cursor(text);
+    return raw
+      .map((r, order) => ({ r, order }))
+      .sort((a, b) => a.r.index - b.r.index || a.order - b.order)
+      .map(({ r }) => {
+        const position = cursor.at(r.index);
+        return makeDiagnostic(r.code, position, position, r.detail);
+      });
+  };
+
+  const report = (
+    code: "XFER0602" | "XFER0905" | "XFER0907",
+    index: number,
+    detail: string,
+  ): void => {
+    raw.push({ code, index, detail });
+    if (code !== "XFER0905") {
       failed = true;
+    }
+  };
+
+  // Called for every container, empty or not, with the index of its opening bracket.
+  const enter = (at: number): void => {
+    if (stack.length + 1 > depthLimit && !depthReported) {
+      depthReported = true;
+      report("XFER0602", at, `nesting exceeds ${depthLimit} levels`);
     }
   };
 
@@ -180,7 +212,7 @@ export function fromJson(text: string): {
   const stack: Frame[] = [];
   let result: XferValue | undefined;
 
-  const push = (value: XferValue, at: number): void => {
+  const push = (value: XferValue): void => {
     const top = stack[stack.length - 1];
     if (top === undefined) {
       result = value;
@@ -189,7 +221,7 @@ export function fromJson(text: string): {
     } else {
       const key = top.key as string;
       if (top.entries.has(key)) {
-        report("XFER0905", at, `duplicate key ${JSON.stringify(key)}`);
+        report("XFER0905", top.keyAt, `duplicate key ${JSON.stringify(key)}`);
       }
       top.entries.set(key, value);
       top.key = undefined;
@@ -207,19 +239,28 @@ export function fromJson(text: string): {
         const c = text[i];
         if (c === "{") {
           i++;
-          stack.push({ kind: "object", items: [], entries: new Map(), key: undefined });
+          enter(start);
+          stack.push({
+            kind: "object",
+            items: [],
+            entries: new Map(),
+            key: undefined,
+            keyAt: 0,
+          });
           skipSpace();
           if (text[i] === "}") {
             i++;
             stack.pop();
-            push({ kind: "object", entries: new Map() }, start);
+            push({ kind: "object", entries: new Map() });
             expectValue = false;
           } else {
             // Read the first key.
             if (text[i] !== '"') {
               throw new Malformed(i, "expected a string key");
             }
-            (stack[stack.length - 1] as Frame).key = readString();
+            const frame = stack[stack.length - 1] as Frame;
+            frame.keyAt = i;
+            frame.key = readString();
             skipSpace();
             if (text[i] !== ":") {
               throw new Malformed(i, "expected `:`");
@@ -229,11 +270,12 @@ export function fromJson(text: string): {
           continue;
         }
         if (c === "[") {
+          enter(start);
           i++;
           skipSpace();
           if (text[i] === "]") {
             i++;
-            push({ kind: "sequence", items: [] }, start);
+            push({ kind: "sequence", items: [] });
             expectValue = false;
           } else {
             stack.push({
@@ -241,22 +283,23 @@ export function fromJson(text: string): {
               items: [],
               entries: new Map(),
               key: undefined,
+              keyAt: 0,
             });
           }
           continue;
         }
         if (c === '"') {
           const value = readString();
-          push({ kind: "string", value }, start);
+          push({ kind: "string", value });
         } else if (text.startsWith("true", i)) {
           i += 4;
-          push({ kind: "bool", value: true }, start);
+          push({ kind: "bool", value: true });
         } else if (text.startsWith("false", i)) {
           i += 5;
-          push({ kind: "bool", value: false }, start);
+          push({ kind: "bool", value: false });
         } else if (text.startsWith("null", i)) {
           i += 4;
-          push({ kind: "null" }, start);
+          push({ kind: "null" });
         } else if (c === "-" || (c !== undefined && c >= "0" && c <= "9")) {
           NUMBER.lastIndex = i;
           const m = NUMBER.exec(text);
@@ -266,9 +309,9 @@ export function fromJson(text: string): {
           const lexeme = m[0];
           i += lexeme.length;
           if (m[1] === undefined && m[2] === undefined) {
-            push({ kind: "integer", value: BigInt(lexeme), lexeme }, start);
+            push({ kind: "integer", value: BigInt(lexeme), lexeme });
           } else {
-            push({ kind: "fractional", lexeme }, start);
+            push({ kind: "fractional", lexeme });
           }
         } else {
           throw new Malformed(
@@ -298,6 +341,7 @@ export function fromJson(text: string): {
           if (text[i] !== '"') {
             throw new Malformed(i, "expected a string key");
           }
+          top.keyAt = i;
           top.key = readString();
           skipSpace();
           if (text[i] !== ":") {
@@ -315,19 +359,18 @@ export function fromJson(text: string): {
           top.kind === "object"
             ? { kind: "object", entries: top.entries }
             : { kind: "sequence", items: top.items };
-        push(done, i);
+        push(done);
         continue;
       }
       throw new Malformed(i, c === undefined ? "unexpected end of text" : "unexpected character");
     }
   } catch (e) {
     if (e instanceof Malformed) {
-      const position = cursor.at(e.index);
-      diagnostics.push(makeDiagnostic("XFER0906", position, position, e.message));
-      return { value: undefined, diagnostics };
+      raw.push({ code: "XFER0906", index: e.index, detail: e.message });
+      return { value: undefined, diagnostics: finish() };
     }
     throw e;
   }
 
-  return { value: failed ? undefined : result, diagnostics };
+  return { value: failed ? undefined : result, diagnostics: finish() };
 }

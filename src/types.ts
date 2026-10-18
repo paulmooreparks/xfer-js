@@ -231,6 +231,11 @@ export interface CanonicalOptions {
   readonly limits?: Partial<Limits>;
 }
 
+export interface FromJsonOptions {
+  /** Only `depth` applies. Each limit defaults to the specification's minimum. */
+  readonly limits?: Partial<Limits>;
+}
+
 export interface ToJsonOptions {
   readonly stringifyBigInts?: boolean;
   readonly indent?: number;
@@ -238,5 +243,11 @@ export interface ToJsonOptions {
 
 export interface PlainOptions {
   readonly integers?: "number-when-safe" | "bigint";
+  /**
+   * "number" (the default) gives the nearest double, which is lossy for a lexeme with more
+   * precision than a double holds or outside its range (`1e400` becomes Infinity); use
+   * `asNumber` to learn whether a value was exact. "lexeme" keeps the source spelling as a string.
+   */
+  readonly fractionals?: "number" | "lexeme";
   readonly symbols?: "string" | "symbol-object";
 }

@@ -94,7 +94,10 @@ export function toJson(
   options?: ToJsonOptions,
 ): { readonly text: string; readonly diagnostics: readonly Diagnostic[] } {
   const stringify = options?.stringifyBigInts === true;
-  const indent = options?.indent !== undefined && options.indent > 0 ? options.indent : 0;
+  const requested = options?.indent;
+  // As JSON.stringify does: a whole number of spaces, at most 10.
+  const indent =
+    requested !== undefined && requested >= 1 ? Math.min(10, Math.floor(requested)) : 0;
   const diagnostics: Diagnostic[] = [];
   let symbols = 0;
   let temporals = 0;

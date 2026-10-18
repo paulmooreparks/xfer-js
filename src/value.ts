@@ -210,11 +210,14 @@ export function asDecimal(v: XferFractional): { digits: bigint; exponent: number
   if (whole + fraction === "") {
     return undefined;
   }
+  const magnitude = BigInt(whole + fraction);
   const exponent = Number(m[4] ?? "0") - fraction.length;
+  if (magnitude === 0n) {
+    return { digits: 0n, exponent: 0 };
+  }
   if (!Number.isSafeInteger(exponent)) {
     return undefined;
   }
-  const magnitude = BigInt(whole + fraction);
   return { digits: m[1] === "-" ? -magnitude : magnitude, exponent };
 }
 
@@ -277,11 +280,16 @@ interface TemporalNamespace {
 /**
  * The value as a `Temporal` object (PlainDate, PlainTime, PlainDateTime, or Instant) when the
  * platform has `Temporal`, else undefined. Never polyfills. Undefined also when `Temporal`
- * refuses the lexeme, for example one with more than nine fractional digits.
+ * refuses the lexeme (for example more than nine fractional digits) or cannot hold it: second 60,
+ * which the specification accepts, is undefined because Temporal would change it to 59. An
+ * `Instant` has no offset, so a datetime's offset is not kept; read the lexeme if it matters.
  */
 export function asTemporal(v: XferTemporal): unknown {
   const temporal = (globalThis as { Temporal?: TemporalNamespace }).Temporal;
   if (temporal === undefined) {
+    return undefined;
+  }
+  if (/:60(?![0-9])/.test(v.lexeme)) {
     return undefined;
   }
   try {

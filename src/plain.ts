@@ -20,7 +20,7 @@ function leaf(value: Exclude<XferValue, Container>, options?: PlainOptions): unk
         ? value.value
         : Number(value.value);
     case "fractional":
-      return asNumber(value).value;
+      return options?.fractionals === "lexeme" ? value.lexeme : asNumber(value).value;
     case "bool":
       return value.value;
     case "null":
