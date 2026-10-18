@@ -1,0 +1,531 @@
+# xfer-js: implementation design
+
+The JavaScript implementation of XferLang 1.0, published to npm as `xferlang`. This document is written so that an engineer or an agent can implement the package from it without further design decisions. Read `../xferlang/spec/xferlang.md` first; this document does not restate the language, it says how to build it in TypeScript. Where this document pins something the specification leaves open, section 12 lists it so the specification can be updated in the same change.
+
+Written 2026-10-18. Decisions made during implementation are recorded in section 16.
+
+## 1. Non-negotiables
+
+1. **Zero runtime dependencies.** `package.json` has no `dependencies`. Dev dependencies are pinned.
+2. **The core imports nothing from Node.** No `fs`, `path`, `process`, `Buffer`, `node:*`. The core uses only `TextEncoder`, `TextDecoder`, `Map`, `BigInt` and plain language features, all of which exist in Node 18+, every current browser, Deno and Bun. The CLI (`cli/`) is the only place Node APIs appear.
+3. **The core never throws for input content.** `parse()` returns diagnostics. The only function that throws on input is `parseValue()`, and it throws `XferError` carrying the same diagnostics. Programming errors (wrong argument types) may throw `TypeError`.
+4. **No recursion on input-controlled depth.** The parser, the canonical writer, `toJson`, `fromJson`, `toPlain` and the tagged-value test helper all use explicit stacks. The depth limit is a diagnostic, not a guard against stack overflow.
+5. **Strings are verbatim.** No code path ever interprets a backslash or any other character inside a string literal.
+6. **The suite is the oracle.** A test that passes by special-casing a suite file is a defect. When the suite and this implementation disagree, section 11 says what to do.
+7. **Identical behaviour on every surface.** The CLI, the browser, Deno and Bun all call the same functions with the same options; nothing is surface-specific except I/O.
+
+## 2. Repository layout
+
+```
+xfer-js/
+  package.json
+  tsconfig.json
+  tsdown.config.ts
+  biome.json
+  vitest.config.ts
+  .changeset/
+  .github/workflows/ci.yml
+  .github/workflows/release.yml
+  LICENSE                       MIT
+  README.md
+  SECURITY.md
+  CHANGELOG.md                  maintained by changesets
+  suite/                        git submodule: https://github.com/paulmooreparks/xferlang
+  src/
+    index.ts                    public API re-exports only
+    types.ts                    XferValue, Annotation, Document/Node/Token, Diagnostic, options
+    diagnostics.ts              codes table, severities, messages, Diagnostic factory
+    limits.ts                   LIMIT_MINIMUMS, resolveLimits()
+    unicode.ts                  identifier start/continue predicates, excluded ranges, UTF-8 length
+    normalize.ts                decode + validate UTF-8, strip BOM, CR/CRLF -> LF
+    lexer.ts                    Lexer: normalized text -> tokens + trivia + diagnostics
+    parser.ts                   Parser: tokens -> Document (lossless tree) + diagnostics
+    value.ts                    Document -> XferValue; asNumber, asDecimal, asTemporal helpers
+    canonical.ts                XferValue | Document -> canonical text
+    strings.ts                  chooseDelimiter(), writeString(); shared by canonical and CLI
+    json/
+      read.ts                   JSON text -> XferValue (own reader; keeps lexemes, sees duplicates)
+      write.ts                  XferValue -> JSON text
+    plain.ts                    XferValue -> ordinary JavaScript values
+    error.ts                    XferError
+  cli/
+    main.ts                     argument parsing, exit codes, I/O; imports from ../src
+  test/
+    txtar.ts                    archive reader
+    tagged.ts                   XferValue -> tagged JSON (the suite's value form)
+    conformance.test.ts         generated from suite/tests
+    bytes.test.ts               generated from suite/tests/bytes
+    property.test.ts            embedding and whitespace invariants (fast-check)
+    api.test.ts                 options, errors, helpers
+    cli.test.ts                 spawns the built CLI
+```
+
+## 3. Public API (`src/index.ts`)
+
+Everything exported is listed here. Nothing else is public.
+
+```ts
+export { parse, parseValue } from "./parser-entry";
+export { canonical } from "./canonical";
+export { toJson } from "./json/write";
+export { fromJson } from "./json/read";
+export { toPlain } from "./plain";
+export { asNumber, asDecimal, asTemporal } from "./value";
+export { XferError } from "./error";
+export { DIAGNOSTICS } from "./diagnostics";
+export { LIMIT_MINIMUMS } from "./limits";
+export type {
+  XferValue, XferObject, XferSequence, XferString, XferInteger, XferFractional,
+  XferBool, XferNull, XferSymbol, XferTemporal, Annotation,
+  Document, Node, Token, TokenKind, Trivia,
+  Diagnostic, DiagnosticCode, Severity,
+  ParseOptions, ParseResult, Limits, CanonicalOptions, ToJsonOptions, PlainOptions,
+} from "./types";
+```
+
+### 3.1 Parsing
+
+```ts
+export interface Limits {
+  readonly documentBytes: number;   // default 2**31 - 1
+  readonly depth: number;           // default 256
+  readonly tokenBytes: number;      // default 2**31 - 1
+  readonly runLength: number;       // default 64
+  readonly elements: number;        // default 2**31 - 1
+}
+export interface ParseOptions {
+  readonly limits?: Partial<Limits>;   // values below the minimums are raised to the minimums
+}
+export interface ParseResult {
+  readonly ok: boolean;                       // no diagnostic of severity "error"
+  readonly value: XferValue | undefined;      // present iff ok
+  readonly version: number;                   // from the xfer head, or 1
+  readonly tree: Document;                    // always present; may contain error nodes
+  readonly diagnostics: readonly Diagnostic[];
+}
+export function parse(input: string | Uint8Array, options?: ParseOptions): ParseResult;
+export function parseValue(input: string | Uint8Array, options?: ParseOptions): XferValue; // throws XferError
+```
+
+`parse` never throws for any `input` content. `value` is `undefined` whenever any error-severity diagnostic exists, even if a partial tree was built; consumers who want partial data read `tree`.
+
+### 3.2 Value model (`src/types.ts`)
+
+```ts
+export interface Annotation { readonly name: string; readonly value: XferValue; }
+interface Base { readonly annotations?: readonly Annotation[]; }   // absent when none
+
+export interface XferObject    extends Base { readonly kind: "object";    readonly entries: ReadonlyMap<string, XferValue>; }
+export interface XferSequence  extends Base { readonly kind: "sequence";  readonly items: readonly XferValue[]; }
+export interface XferString    extends Base { readonly kind: "string";    readonly value: string; }
+export interface XferInteger   extends Base { readonly kind: "integer";   readonly value: bigint; readonly lexeme: string; }
+export interface XferFractional extends Base { readonly kind: "fractional"; readonly lexeme: string; }  // includes "inf" "-inf" "nan"
+export interface XferBool      extends Base { readonly kind: "bool";      readonly value: boolean; }
+export interface XferNull      extends Base { readonly kind: "null"; }
+export interface XferSymbol    extends Base { readonly kind: "symbol";    readonly name: string; }
+export interface XferTemporal  extends Base {
+  readonly kind: "date" | "time" | "local-datetime" | "datetime";
+  readonly lexeme: string;
+}
+export type XferValue = XferObject | XferSequence | XferString | XferInteger | XferFractional
+                      | XferBool | XferNull | XferSymbol | XferTemporal;
+```
+
+- Objects use `Map` because the spec makes key order normative and `Map` preserves insertion order for every key, including `__proto__` and numeric-looking keys, which plain objects do not.
+- `XferInteger.value` is exact at any size. `lexeme` is the source spelling, used by the canonical writer.
+- Fractionals keep only the lexeme. The package never decides float versus decimal.
+- `annotations` is omitted (not an empty array) when there are none, so structural equality in tests is simple.
+
+Helpers (`src/value.ts`):
+
+```ts
+export function asNumber(v: XferInteger | XferFractional): { value: number; exact: boolean };
+// integer: exact iff |value| <= 2**53-1. fractional: Number(lexeme without "_"); exact iff the
+// decimal expansion of the result equals the lexeme's value (compare via asDecimal of both).
+export function asDecimal(v: XferFractional): { digits: bigint; exponent: number } | undefined;
+// 1.50 -> {digits: 150n, exponent: -2}; 6.02e23 -> {digits: 602n, exponent: 21}; undefined for inf/-inf/nan.
+export function asTemporal(v: XferTemporal): unknown | undefined;
+// Returns a Temporal.PlainDate / PlainTime / PlainDateTime / Instant-with-offset (ZonedDateTime is wrong: no zone)
+// when globalThis.Temporal exists, else undefined. Never polyfills.
+```
+
+### 3.3 Lossless tree (`src/types.ts`)
+
+```ts
+export interface Position { readonly offset: number; readonly line: number; readonly column: number; }
+// offset: UTF-8 byte offset into the normalized text, 0-based. line, column: 1-based; column counts scalar values.
+
+export type TokenKind =
+  | "lbrace" | "rbrace" | "lbrack" | "rbrack" | "annot-open" | "annot-close"
+  | "string" | "integer" | "fractional" | "date" | "time" | "local-datetime" | "datetime"
+  | "keyword" | "identifier" | "error" | "eof";
+
+export interface Token {
+  readonly kind: TokenKind;
+  readonly start: Position;
+  readonly end: Position;           // exclusive
+  readonly text: string;            // exact source slice, delimiters included
+  readonly leading: readonly Trivia[];   // whitespace and comments before this token
+  // kind-specific:
+  readonly content?: string;        // string: decoded content (a slice; no interpretation)
+  readonly delimiter?: { readonly form: "rep" | "hash"; readonly run: number };
+  readonly keyword?: "true" | "false" | "null" | "inf" | "-inf" | "nan";
+}
+export interface Trivia {
+  readonly kind: "whitespace" | "comment";
+  readonly start: Position; readonly end: Position; readonly text: string;
+  readonly run?: number;            // comment: the slash run length
+}
+
+export type Node =
+  | { readonly kind: "object";   readonly open: Token; readonly close: Token | undefined; readonly pairs: readonly PairNode[]; readonly annotations: readonly AnnotationNode[] }
+  | { readonly kind: "sequence"; readonly open: Token; readonly close: Token | undefined; readonly items: readonly Node[]; readonly annotations: readonly AnnotationNode[] }
+  | { readonly kind: "scalar";   readonly token: Token; readonly annotations: readonly AnnotationNode[] }
+  | { readonly kind: "error";    readonly tokens: readonly Token[]; readonly annotations: readonly AnnotationNode[] };
+export interface PairNode { readonly key: Token; readonly value: Node | undefined; readonly annotations: readonly AnnotationNode[]; }
+export interface AnnotationNode { readonly open: Token; readonly name: Token; readonly value: Node | undefined; readonly close: Token | undefined; }
+export interface Document {
+  readonly head: AnnotationNode | undefined;   // the xfer head
+  readonly root: Node | undefined;
+  readonly eof: Token;                         // its leading trivia is the document's trailing trivia
+  readonly text: string;                       // the normalized text
+}
+```
+
+Every byte of the normalized text is reachable: each token's `leading` trivia plus its `text`, in order, concatenated over the token stream (ending with `eof`), reproduces `Document.text` exactly. `test/api.test.ts` asserts this for every suite document.
+
+### 3.4 Diagnostics
+
+```ts
+export type Severity = "error" | "warning" | "info";
+export type DiagnosticCode = keyof typeof DIAGNOSTICS;   // "XFER0101" | ...
+export interface Diagnostic {
+  readonly code: DiagnosticCode;
+  readonly severity: Severity;
+  readonly message: string;        // English, one sentence, no trailing period, may include specifics
+  readonly start: Position;
+  readonly end: Position;          // exclusive; equals start for a point diagnostic
+}
+export const DIAGNOSTICS: Readonly<Record<string, { severity: Severity; summary: string }>>;
+```
+
+`DIAGNOSTICS` is the table in spec section 10, transcribed. Messages are built from the summary plus specifics (for example `XFER0404` lists the inferred pairings, as the spec requires).
+
+### 3.5 Writing and mapping
+
+```ts
+export interface CanonicalOptions { readonly limits?: Partial<Limits>; }  // runLength affects the choice rule
+export function canonical(input: XferValue | Document, options?: CanonicalOptions): string;
+// For a Document: uses tree.root and tree.head; error nodes throw XferError (canonical form of an invalid document is undefined).
+
+export interface ToJsonOptions { readonly stringifyBigInts?: boolean; readonly indent?: number; }
+export function toJson(value: XferValue, options?: ToJsonOptions): { readonly text: string; readonly diagnostics: readonly Diagnostic[] };
+// Returns JSON text, not a JS value, so integers beyond 2**53 are written at full precision.
+
+export function fromJson(text: string): { readonly value: XferValue | undefined; readonly diagnostics: readonly Diagnostic[] };
+// Own JSON reader (section 8). Malformed JSON -> XFER0906 (see section 12). Duplicate keys -> XFER0905, last wins.
+
+export interface PlainOptions { readonly integers?: "number-when-safe" | "bigint" ; readonly symbols?: "string" | "symbol-object"; }
+export function toPlain(value: XferValue, options?: PlainOptions): unknown;
+// object -> {} (keys in order; a key "__proto__" is set with Object.defineProperty), sequence -> [], string -> string,
+// integer -> number when |v| <= 2**53-1 else bigint (default) or always bigint, fractional -> Number(lexeme),
+// bool, null, symbol -> string (default) or the XferSymbol object, temporal -> lexeme string. Annotations dropped.
+```
+
+## 4. Normalization (`src/normalize.ts`)
+
+```ts
+export interface Normalized { readonly text: string; readonly diagnostics: Diagnostic[]; readonly inputBytes: number; }
+export function normalize(input: string | Uint8Array, limits: Limits): Normalized;
+```
+
+1. If `input` is `Uint8Array`: if `input.length > limits.documentBytes`, emit `XFER0601` at offset 0 and return with empty text. Decode with `new TextDecoder("utf-8", { fatal: true, ignoreBOM: false })`. On `TypeError`, emit `XFER0701` at offset 0 and return with empty text. (Position of the first bad byte is not available from `TextDecoder`; a point diagnostic at 0 is acceptable; the suite uses `*` for these cases.) `ignoreBOM: false` makes the decoder strip a leading BOM.
+2. If `input` is `string`: if it contains a lone surrogate (scan with a regex `/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/`), emit `XFER0701` at the scalar-value offset of the first one. Strip a leading U+FEFF. Compute the UTF-8 byte length; if it exceeds `limits.documentBytes`, `XFER0601`.
+3. Replace `\r\n` with `\n`, then remaining `\r` with `\n`.
+4. Return the text. All positions reported by the lexer and parser are positions in this normalized text (section 12, item 1).
+
+## 5. Lexer (`src/lexer.ts`)
+
+```ts
+export class Lexer {
+  constructor(text: string, limits: Limits, diagnostics: Diagnostic[]);
+  next(): Token;          // returns "eof" repeatedly at end; never throws
+}
+```
+
+The lexer walks the string by code point (`codePointAt`, advancing 1 or 2 UTF-16 units) and maintains `index` (UTF-16), `offset` (UTF-8 bytes, computed from each code point: 1 for < 0x80, 2 for < 0x800, 3 for < 0x10000, else 4), `line` and `column` (scalar values, reset to 1 after `\n`). Every token and trivia records start and end positions.
+
+### 5.1 Trivia
+
+Before each token, collect trivia in order:
+
+- Whitespace: a maximal run of U+0020, U+0009, U+000A, U+000C.
+- Comment: `<` followed by one or more `/`. Let `n` be the slash run (count all consecutive slashes). If `n > limits.runLength`, emit `XFER0604` at the comment start and treat the comment as unterminated for recovery purposes. Then scan forward: at each `/`, measure the maximal slash run `r`; if `r === n` and the character after the run is `>`, the comment ends after `>`; otherwise continue scanning from after the run. If end of text is reached, emit `XFER0104` at the comment start and the comment extends to end of text.
+
+Trivia is attached as `leading` to the next token (or to `eof`).
+
+### 5.2 Dispatch
+
+After trivia, dispatch on the current code point:
+
+| Current | Token |
+|---|---|
+| end of text | `eof` |
+| `{` `}` `[` `]` | the bracket, one character |
+| `<` then `!` | `annot-open`, two characters |
+| `<` then anything else (`/` was consumed as trivia) | `XFER0102` at `<`; emit an `error` token of one character |
+| `!` then `>` | `annot-close`, two characters |
+| `"` | repetition string (5.3) |
+| `#` | hash string (5.4) |
+| `0`..`9` | number or temporal (5.5) |
+| `-` | `-inf`, or a negative number (5.5) |
+| ASCII letter, `_`, admitted non-ASCII | identifier or keyword (5.6) |
+| anything else | `XFER0103` at the character; emit an `error` token; skip to the next terminator (5.7) |
+
+### 5.3 Repetition string
+
+1. Count the opening run `n` of consecutive `"`. If `n > limits.runLength`: `XFER0604` at the token start, then recover by treating the string as unterminated.
+2. **Empty-string special case:** if `n === 2` and the next character is not `"` (or is end of text), the token is the empty string, length 2.
+3. Otherwise scan forward from after the opening run. At each `"`, measure the maximal run `r`. If `r === n`, the string ends after that run; content is the text between the runs. If `r !== n`, continue from after the run (those quotes are content). At end of text: `XFER0201` at the token start; the token's content is everything after the opener and the token ends at end of text (recovery: the rest of the document is consumed, as the spec allows).
+4. `delimiter = { form: "rep", run: n }`; `content` is a slice (no copying beyond `substring`).
+5. If the content's byte length exceeds `limits.tokenBytes`: `XFER0603`.
+
+### 5.4 Hash string
+
+1. Count the hash run `m`. If `m > limits.runLength`: `XFER0604`. If the next character is not `"`: `XFER0202` at the first `#`; emit an `error` token covering the hashes; continue lexing at the character after them.
+2. Scan forward from after the `"`. At each `"`, count the hashes `r` that immediately follow (maximal run). If `r === m`, the string ends after those hashes. Otherwise continue from after the hash run. End of text: `XFER0201` at token start.
+3. `delimiter = { form: "hash", run: m }`.
+
+### 5.5 Numbers and temporals
+
+A hand-written scanner, grammar-driven, never a regex over a "scalar run", because the separation rule requires a token to end where its grammar ends (so `1-2` is `1` followed by a separation error at `-`, and `2025-08-01t09:30:00` is a date followed by a separation error at `t`).
+
+Let `s` be the token start. Steps:
+
+1. If the current character is `-`: consume it. If the next three characters are `inf` and the character after them is a terminator (5.7), the token is the keyword `-inf`. Otherwise, if the next character is not a digit, emit `XFER0302` at `s` and recover (5.7).
+2. If the current character is `0` and the next is `x`, `o` or `b`: consume both; scan digits of that radix with the underscore rule (an `_` must be preceded and followed by a digit of the radix). At least one digit is required. Any violation: `XFER0302` at `s`, recover. Result: `integer`.
+3. Otherwise scan a decimal digit run with the underscore rule. Let `d` be the digits (without underscores) and `u` whether any underscore appeared.
+   - If `d` has length > 1 and starts with `0`: `XFER0301` at `s`, recover.
+   - If the next character is `-` and `d.length === 4` and `!u`: this is a date. Require `-` `DD` `-` `DD` exactly (two digits each). Then, if the next character is `T`: require `HH:MM:SS`, optionally `.` followed by one or more digits, optionally `Z` or `+HH:MM` or `-HH:MM`. Any shape violation: `XFER0304` at `s`, recover. Then validate ranges (5.5.1): violation is `XFER0305` at `s` (the token is still produced, as an `error` token). Kind: `date`, `local-datetime` (no offset) or `datetime` (offset).
+   - If the next character is `:` and `d.length === 2` and `!u`: this is a time. Require `:MM:SS` then optional fraction. Violation: `XFER0304`. Validate ranges. Kind: `time`.
+   - If the next character is `.`: require at least one digit after it (underscore rule applies within the fraction digits); else `XFER0302`. Then optional exponent. Kind: `fractional`.
+   - If the next character is `e` or `E`: optional `+` or `-`, then at least one digit (underscore rule). Else `XFER0302`. Kind: `fractional`.
+   - Otherwise kind: `integer`.
+4. The token ends here. The separation check (5.7) follows.
+
+The integer token's `text` is the lexeme; the parser computes `value` with `BigInt` after removing underscores and handling the radix prefix (`BigInt("0x1f")` works; for the negative case apply the sign separately).
+
+#### 5.5.1 Temporal range validation
+
+Year 0000 to 9999 (any four digits); month 01 to 12; day 01 to the month's length, with February 29 only in leap years (divisible by 4, except centuries not divisible by 400); hour 00 to 23; minute 00 to 59; second 00 to 60 (60 permits a leap second, as RFC 3339 does; section 12, item 3); offset hour 00 to 23 and minute 00 to 59. The fraction may have any number of digits.
+
+### 5.6 Identifiers and keywords
+
+1. The start character is an ASCII letter, `_`, or an admitted non-ASCII scalar value (section 6). Consume continuation characters: ASCII letters, digits, `_`, `-`, `.`, admitted non-ASCII.
+2. If the last character consumed is `.`: `XFER0105` at the token start. The token is still an `identifier` (so the parser can continue) but is marked by the diagnostic.
+3. If the text is exactly `true`, `false`, `null`, `inf` or `nan`: kind `keyword` with the `keyword` field set. Otherwise kind `identifier`.
+4. Separation check follows.
+
+### 5.7 Separation check and recovery
+
+A **terminator** is: end of text; U+0020, U+0009, U+000A, U+000C; `{`, `}`, `[`, `]`; `<`; or `!` immediately followed by `>`.
+
+After every scalar token (string, number, temporal, keyword, identifier), if the next character is not a terminator, emit `XFER0101` at that character's position. Then **recover** by skipping characters until a terminator, without emitting further diagnostics for them. The skipped text becomes an `error` token so the tree stays lossless.
+
+**Recovery after a malformed number, temporal or hash opener** (`XFER0301`, `XFER0302`, `XFER0304`, `XFER0202`): skip to the next terminator the same way; the whole skipped span is one `error` token starting at `s`.
+
+`XFER0603` (token length) is checked against the UTF-8 byte length of every token's `text`.
+
+## 6. Unicode (`src/unicode.ts`)
+
+```ts
+export function isIdentifierStart(cp: number): boolean;     // ASCII letter, "_", or admitted non-ASCII
+export function isIdentifierContinue(cp: number): boolean;  // start chars, ASCII digit, "-", "."
+export function isAdmittedNonAscii(cp: number): boolean;    // cp >= 0x80 and not excluded
+export function utf8Length(cp: number): 1 | 2 | 3 | 4;
+```
+
+Excluded (spec 4.3): U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF; U+200B to U+200F, U+202A to U+202E, U+2060 to U+2064, U+2066 to U+2069. Implement as a sorted array of `[lo, hi]` pairs and a linear scan (fourteen ranges; no table generation, no Unicode version dependency). Surrogate code points cannot occur after normalization.
+
+## 7. Parser (`src/parser.ts`)
+
+```ts
+export function parseDocument(text: string, limits: Limits, diagnostics: Diagnostic[]): { tree: Document; version: number };
+```
+
+An iterative parser with an explicit stack. Each stack frame is an open container: `{ node: object|sequence under construction, open: Token, pendingAnnotations: AnnotationNode[], pendingKey?: Token, pendingPairAnnotations?: AnnotationNode[] }`. Depth is the stack length; opening a container when `stack.length === limits.depth` emits `XFER0602` at the bracket and the bracket is recorded as an `error` node and skipped (its contents are then parsed at the same depth, which is wrong but bounded; the document is already invalid).
+
+### 7.1 Document
+
+1. Read the first token. If it is `annot-open`, look ahead: if the annotation's name token is the identifier `xfer`, this is the head. The head is valid only if the `annot-open` token has **no leading comment trivia** and starts at offset 0 after whitespace... Correction, per spec 7: the head must be the first token of the document, so its `annot-open` must have no comment in its leading trivia (whitespace is permitted; section 12, item 4 asks the spec to say so). Parse the annotation (7.3). Its value must be an `integer` token with a plain decimal lexeme (no radix, no `_`, no sign); otherwise `XFER0504` at the `annot-open`. If the value is not `1`: `XFER0504`. Record `version`.
+2. Parse one element (7.2). If the first token is `eof`: `XFER0401` at the eof position; `root` is `undefined`.
+3. After the element, the next token must be `eof`; otherwise `XFER0402` at that token, and the rest of the tokens are consumed into an `error` node so the tree stays lossless.
+
+### 7.2 Elements, containers, pairs
+
+Driven by the stack:
+
+- **At a value position** (document root, sequence item, or after a key): collect zero or more annotations (7.3) into `pending`. Then:
+  - `lbrace` / `lbrack`: push a frame with `pending` as the container's annotations.
+  - a scalar token: produce a scalar node with `pending`.
+  - `rbrace` / `rbrack` / `eof` / `annot-close` while `pending` is non-empty: `XFER0502` at the first pending annotation's `annot-open`. Then handle the token as below.
+  - `error` token: produce an error node.
+- **In a sequence frame:** `rbrack` closes it. `rbrace`: `XFER0406` at the token; consume it as an error node and continue in the same frame. `eof`: `XFER0405` at the frame's `open` token; close the frame with `close: undefined`.
+- **In an object frame, expecting a key:** `rbrace` closes it. `identifier` → key (a trailing-dot identifier was already diagnosed by the lexer and is accepted as a key). `string` → key (its `content` is the key text). `keyword`, `integer`, `fractional`, any temporal → `XFER0407` at the token; treat the token as the key anyway so the value that follows is consumed and the shift is contained. `lbrace`/`lbrack`/scalar where a key is expected but the previous pair has no value is not reachable (see next bullet). `rbrack`: `XFER0406`, consume. `eof`: `XFER0405` at `open`.
+- **In an object frame, expecting a value** (after a key): if the next token is `rbrace` or `eof`: `XFER0404` at the key token; the pair is recorded with `value: undefined`; then handle the token as a close or unterminated. Otherwise parse the value as at a value position.
+- **Duplicate keys:** when a pair completes, compare its key text (identifier text, or string content) with the frame's `Set` of keys; on a repeat emit `XFER0403` at the repeated key token. Both pairs stay in the tree; the value model keeps the last (section 12, item 5).
+- **Element count:** every node produced increments a counter; exceeding `limits.elements` emits `XFER0605` once and parsing continues.
+
+The `XFER0404` message must list the pairings the parser inferred in that object, as `key=value-kind` pairs (for example `a=symbol b, c=symbol d, e=symbol f, g=?`), because the spec requires it and because it is the only way a reader finds a shifted pair.
+
+### 7.3 Annotations
+
+On `annot-open`:
+1. The next token must be an `identifier` (name). If it is `eof` or anything else: `XFER0506` at `annot-open` with a message that the name is missing; recover by consuming tokens up to and including the next `annot-close` or to `eof`.
+2. Parse exactly one value as at a value position, but with annotations **disallowed**: if an `annot-open` is seen where the value should start, emit `XFER0501` at that inner `annot-open`, then parse the inner annotation and discard it, then parse the value. Containers inside an annotation value are parsed with the same stack machinery (push a frame flagged `inAnnotation`), and an `annot-open` encountered anywhere inside such a frame is `XFER0501`.
+3. The next token must be `annot-close`; else `XFER0506` with a message that `!>` is missing (section 12, item 6 asks for a dedicated code), and recover as in step 1.
+4. Name handling: `xfer` outside the document head → `XFER0503` at `annot-open`. `id` → value must be a string; record in a document-wide `Set`; repeat → `XFER0505` at `annot-open`. `tag` → value must be a string or symbol. `lang` → value must be a string or symbol. Any other name → `XFER0506`. A wrong value type for a known name is `XFER0506` with a message saying so (section 12, item 6).
+
+Annotations collected before a key inside an object attach to the pair (`PairNode.annotations`); before an item or the root, to the element.
+
+### 7.4 Value model projection (`src/value.ts`)
+
+`toValue(tree: Document): XferValue | undefined` walks the tree iteratively. Any error node, any pair with `value: undefined`, any container with `close: undefined` makes the result `undefined` (the caller already has `ok === false`). Integers: `BigInt` of the lexeme with underscores removed and the sign applied. Duplicate keys: last wins. Annotations: `AnnotationNode` → `{ name, value }` with the value projected.
+
+## 8. JSON (`src/json/`)
+
+**Reader.** A small recursive-descent-by-explicit-stack JSON reader over the text, RFC 8259 strict (no comments, no trailing commas, no single quotes). It keeps number lexemes so `1.50` becomes the fractional `1.50` and `-0` the integer `-0`; a number with a fraction or exponent is `fractional`, otherwise `integer`. Strings are decoded with full escape handling (`\uXXXX` with surrogate pairs). Objects detect duplicate keys and emit `XFER0905` (warning) keeping the last value. Malformed JSON emits `XFER0906` (section 12, item 2) at the fault position and returns `value: undefined`.
+
+**Writer.** Walks an `XferValue` and writes JSON text with its own escaper (`"`, `\`, control characters as `\uXXXX`, `\n` `\r` `\t` `\b` `\f` as the short forms). Integers are written from `value.toString()` (full precision) unless `stringifyBigInts` and the magnitude exceeds 2^53−1, in which case as a string; either way `XFER0901` (warning) when the magnitude exceeds 2^53−1. Fractionals: the lexeme with `_` removed; `inf`, `-inf`, `nan` → `XFER0902` (error) and the writer emits `null` in that position so the output is still JSON. Symbols → string, `XFER0903` (info). Temporals → string, `XFER0904` (info). Annotations dropped. `indent` of 0 or undefined writes compact JSON; otherwise pretty with that many spaces.
+
+## 9. Canonical writer (`src/canonical.ts` and `src/strings.ts`)
+
+Implements spec section 6 exactly. Iterative over the value with an explicit stack of `{ value, indent, phase }`.
+
+```ts
+export function chooseDelimiter(content: string, runLimit: number): { form: "rep" | "hash"; run: number };
+export function writeString(content: string, runLimit: number): string;
+```
+
+`chooseDelimiter`:
+1. If `content` contains no `"`: `{ rep, 1 }`.
+2. Else if `content` does not start with `"` and does not end with `"`: let `L` be the longest run of `"` in content; `n = L + 1`; if `n > runLimit`, `n` = the smallest positive integer not equal to the length of any quote run in content (collect run lengths into a `Set`, count up from 1). `{ rep, n }`.
+3. Else: let `H` be the longest run of `#` that immediately follows a `"` in content (0 if none); `m = H + 1`; if `m > runLimit`, `m` = the smallest positive integer not equal to any such run length. `{ hash, m }`.
+
+`writeString` renders `"`×n + content + `"`×n, or `#`×m + `"` + content + `"` + `#`×m. Special case: empty content → `""`.
+
+Keys: written bare when the key text satisfies `isIdentifierStart` for its first code point, `isIdentifierContinue` for the rest, does not end with `.`, and is not a keyword; otherwise as `writeString(key)`.
+
+Numbers: integers write the lexeme with any `0x` hex digits lowercased (`lexeme.replace` on the part after the prefix); fractionals write the lexeme as is. Temporals, keywords, symbols as spelled.
+
+Layout: four spaces per level; `{}` and `[]` for empty; otherwise open bracket, newline, each member on its own line, close bracket at the parent indent. Annotations each on their own line before their target at the target's indent, as `<! name value !>` with the value written by the same writer in compact single-line form (an annotation value that is a container is written on one line with single spaces; section 12, item 7). The head, if `version` was present in the source, as `<! xfer 1 !>` on the first line. Output ends with one `\n`.
+
+## 10. CLI (`cli/main.ts`)
+
+Built to `dist/cli.mjs`, `bin: { xfer: "dist/cli.mjs" }`, shebang `#!/usr/bin/env node`. Zero dependencies; argument parsing is a hundred lines by hand.
+
+```
+xfer validate [--json] [FILE...]
+xfer fmt [--write] [FILE...]            canonical form to stdout, or in place with --write
+xfer canon [FILE...]                    alias of fmt without --write
+xfer to-json [--pretty] [--stringify-big-ints] [FILE...]
+xfer from-json [FILE...]
+xfer --version | --help
+```
+
+- No `FILE` or `-` reads stdin. Several files are processed in order; output is concatenated for converters and per-file for `validate`.
+- Input is read as bytes and passed as `Uint8Array`, so UTF-8 validation and positions are the library's.
+- Diagnostics print to stderr in GNU format: `FILE:LINE:COL: error XFER0404: message` (`-` for stdin). With `--json`, one JSON object per diagnostic per line, fields as in `Diagnostic` plus `file`.
+- Exit codes: 0 success with no error diagnostics; 1 at least one error diagnostic in any input; 2 usage error or unreadable file (message to stderr).
+- `fmt --write` writes only if the canonical text differs from the input bytes, and never writes a file whose parse had errors.
+
+`test/cli.test.ts` spawns `node dist/cli.mjs` on suite documents and asserts output and exit codes; it is the only test that needs the build.
+
+## 11. Testing and the suite
+
+### 11.1 Submodule
+
+`suite/` is the `xferlang` repository as a git submodule, pinned to a commit. `npm run suite:update` fast-forwards it and is a pull request on its own. CI fails if the submodule is not checked out.
+
+### 11.2 txtar reader (`test/txtar.ts`)
+
+```ts
+export function readTxtar(text: string): Map<string, string>;  // name -> content, in order
+```
+
+A line that matches `/^-- (.+?) --$/` starts an entry; content runs to the next such line or end of file and includes its final newline. Text before the first entry is ignored. Group entries by stem: `<stem>.xfer`, `<stem>.canonical.xfer`, `<stem>.value.json`, `<stem>.diag`.
+
+### 11.3 Tagged values (`test/tagged.ts`)
+
+`toTagged(value: XferValue): unknown` produces the suite's form (`suite/tests/README.md`): every node `{ "type": ..., "value": ... }`; integers in decimal via `value.toString()`; fractionals as the lexeme with `_` removed; objects as `{ "type": "object", "value": { key: tagged } }` in order; sequences as arrays; annotations as `"annotations": [{ name, value: tagged }]` placed before `type` only for key-order stability in failure diffs (comparison is structural, so order does not matter). The document form is `{ "xfer": n, "root": tagged }` with `xfer` present only when the source had a head.
+
+### 11.4 Conformance tests (`test/conformance.test.ts`, `test/bytes.test.ts`)
+
+For every valid stem: `parse(input)`; assert `ok`; assert `canonical(result.value)` (with the head written when `version` came from the source: pass the tree) equals `<stem>.canonical.xfer` byte for byte; assert `toTagged` structurally equals `JSON.parse(<stem>.value.json)`; assert the lossless property (section 3.3) for the tree; assert `canonical(parse(canonical).value)` equals the canonical text (idempotence).
+
+For every invalid stem: `parse(input)`; assert `!ok`; for each line `CODE L:C` in `.diag` assert some diagnostic has that code at that line and column; for `CODE *` assert some diagnostic has that code. Additional diagnostics are permitted.
+
+`bytes/` cases are read as `Uint8Array` from files; the same assertions apply. Stems ending `-at-minimum` run with default limits (which are the minimums) and are required.
+
+Tests are generated with `describe`/`it` per stem so a failure names the case.
+
+### 11.5 Property tests (`test/property.test.ts`, fast-check)
+
+- **Embedding:** `fc.stringOf(fc.constantFrom("a", '"', "#", " ", "\n"), { maxLength: 64 })`, 10,000 runs: `writeString(s)` parsed as a document yields `value.kind === "string"` with `value === s`.
+- **Whitespace:** for every valid suite document: collapse each maximal whitespace run outside strings and comments to one space (use the lexer's token stream: rebuild text from tokens with a single space wherever leading trivia contained whitespace, keeping comments) and assert equal tagged values and equal canonical output.
+- **Never throws:** `fc.string()` and `fc.uint8Array()`, 10,000 runs each: `parse` returns without throwing.
+
+### 11.6 Coverage
+
+`vitest --coverage` with v8; the floor is 95% lines on `src/`, enforced in CI.
+
+## 12. Items this design pins that the specification must state
+
+Each of these is a spec change to make in the `xferlang` repository in the same change as the first implementation commit that depends on it.
+
+1. **Positions are in the normalized text.** Spec 9 says "UTF-8 byte offset" without saying of what. After CR normalization, offsets differ from the input's; the suite's cases are LF so no case is affected, but the rule must be written.
+2. **A code for malformed JSON in `fromJson`:** `XFER0906`, error, "malformed JSON". The spec's table stops at 0905.
+3. **Leap seconds:** second 60 is accepted, as RFC 3339 permits. Spec 4.6 says "denotes no instant" without listing ranges; list them.
+4. **The head and whitespace:** "first token of the document" should say that leading whitespace is permitted before the head and comments are not.
+5. **Duplicate keys in the value model:** last wins in the tree-to-value projection (the parse is already an error; this only governs tools reading the tree).
+6. **Codes for a malformed annotation and a wrong-typed annotation value.** This design uses `XFER0506` with a distinguishing message; the spec should either confirm that or add `XFER0507` (malformed annotation) and `XFER0508` (annotation value of the wrong type).
+7. **Canonical form of a container-valued annotation:** one line, single spaces, as `<! name { a 1 } !>`. Spec 6 rule 6 says "in canonical form" without saying that annotations do not break lines.
+8. **`XFER0602` recovery:** after the depth diagnostic, the bracket is an error node and its contents are parsed at the same depth. The spec says only that exceeding a limit is a diagnostic.
+
+## 13. Build, packaging, CI, release
+
+- **`package.json`:** `"name": "xferlang"`, `"type": "module"`, `"version"` managed by changesets, `"license": "MIT"`, `"engines": { "node": ">=18" }`, `"sideEffects": false`, `"files": ["dist", "README.md", "LICENSE"]`, `"bin": { "xfer": "dist/cli.mjs" }`, `"exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.mjs", "require": "./dist/index.cjs" }, "./package.json": "./package.json" }`, `"main"`, `"module"`, `"types"` set to the same files for older tooling, `"repository"`, `"homepage": "https://xfer.parkscomputing.com"`, `"keywords"`.
+- **TypeScript:** `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `verbatimModuleSyntax`, `target: ES2022`, `lib: ["ES2022"]` (no DOM; `TextDecoder` comes from `lib.dom` or `@types/node`; declare the two globals locally in `src/globals.d.ts` to avoid either).
+- **Build:** `tsdown` producing `dist/index.mjs`, `dist/index.cjs`, `dist/index.d.ts`, `dist/cli.mjs` (ESM only, with the shebang banner). Minified ESM core size measured by `size-limit`; budget 20 KB.
+- **Lint and format:** `biome` with the recommended rules plus `noExplicitAny: error`; `npm run check` runs biome, `tsc --noEmit`, and the tests.
+- **CI (`ci.yml`):** on push and pull request; matrix Node 18, 20, 22, 24 × ubuntu, windows, macos: install with `npm ci`, `npm run check`, `npm run build`, `npm run test:cli`, `size-limit`; plus a `deno` job (`deno test` importing `dist/index.mjs` and running the conformance cases through a small Deno-side runner) and a `bun` job (`bun test` the same). Submodule checked out with `submodules: true`.
+- **Release (`release.yml`):** on push to `main`, changesets opens or updates the version pull request; merging it runs `npm publish --provenance --access public` under an OIDC trusted publisher (no long-lived token), tags `v<version>`, and attaches `CHANGELOG.md` section to the GitHub release. Prereleases use changesets' `pre` mode with tag `next`.
+- **Docs:** README with the thirty-second example, the JSON mapping on the first screen, the API on one page, and links to the spec and the site; `typedoc` to `docs/` published by Pages.
+- **Security:** `SECURITY.md` with the disclosure address; `npm audit` in CI for dev dependencies only (there are no runtime ones).
+
+## 14. Order of implementation and definition of done
+
+Each step is done when its tests pass in CI on every matrix cell.
+
+1. **Scaffold.** Repository, submodule, configs, empty `src/index.ts`, CI green on nothing.
+2. **Harness.** `txtar.ts`, `tagged.ts`, generated conformance and bytes tests, all failing with "not implemented". This is the first real deliverable: the suite is executable.
+3. **`normalize.ts`, `unicode.ts`, `diagnostics.ts`, `limits.ts`.** Unit tests for BOM, CR, CRLF, invalid UTF-8, lone surrogates, the excluded ranges, UTF-8 lengths.
+4. **`lexer.ts`.** All `1xx`, `2xx`, `3xx`, `4xx` invalid cases produce their diagnostics at their positions; all valid cases lex without diagnostics. Expect to find spec and suite faults here; fix them in `xferlang` and bump the submodule.
+5. **`parser.ts`, `value.ts`.** All `5xx` and `7xx` cases; the lossless property; `parse` and `parseValue` public.
+6. **`canonical.ts`, `strings.ts`.** Every `.canonical.xfer` matches; idempotence; the embedding property test.
+7. **`json/`, `plain.ts`.** Unit tests from the spec's mapping tables; a round trip of every valid suite document through `toJson`/`fromJson` compared on the plain projection.
+8. **CLI.** `cli.test.ts`; the `xfer` binary works from `npx` on a fresh checkout.
+9. **Deno and Bun jobs,** size budget, coverage floor, typedoc, README.
+10. **Publish `0.1.0`** with the `next` tag. Open the issue in `xferlang` listing every spec change made during steps 3 to 8, so that `xfer-dotnet` starts from the corrected spec.
+
+## 15. When the spec and this implementation disagree
+
+1. Do not special-case the suite file. Do not "fix" the case to match the code.
+2. Decide which is wrong by reading the spec rule the case cites. If the spec is ambiguous, write down both readings.
+3. If the spec or suite is wrong: open a commit in `xferlang` that changes the rule and its cases together, with the reasoning in the message; bump the submodule here; cite the commit in this repository's change.
+4. If the design in this document is wrong: fix the code, and record the change in section 16.
+5. If it needs a ruling (two defensible readings): stop, write the question with both readings and a recommendation into `xferlang/history/REBOOT_PROPOSAL.md` section 7 as a pending item, and continue with other work until it is ruled on.
+
+## 16. Decisions recorded
+
+(none yet)
