@@ -166,10 +166,10 @@ describe("strings", () => {
       content: "plain",
       delimiter: { form: "rep", run: 1 },
     });
-    expect(string('""say "hi" now""')).toEqual({
+    expect(string('"""say "hi" now"""')).toEqual({
       kind: "string",
       content: 'say "hi" now',
-      delimiter: { form: "rep", run: 2 },
+      delimiter: { form: "rep", run: 3 },
     });
     expect(string('"C:\\Users\\n"').content).toBe("C:\\Users\\n");
     expect(string('"a\nb"').content).toBe("a\nb");
@@ -187,6 +187,13 @@ describe("strings", () => {
       delimiter: { form: "rep", run: 1 },
     });
     expect(shape('[""]')).toEqual(["lbrack [", 'string ""', "rbrack ]"]);
+  });
+
+  it("treat a run of exactly two quotes as the empty string whatever follows", () => {
+    expect(shape('""x""')).toEqual(['string ""', 'error x""']);
+    expect(codes('""x""')).toEqual(["XFER0101 1:3"]);
+    expect(codes('""He said "hi" today""')).toContain("XFER0101 1:3");
+    expect(shape('"" ""')).toEqual(['string ""', 'string ""']);
   });
 
   it("read hash-run strings, whose content may begin and end with a quote", () => {

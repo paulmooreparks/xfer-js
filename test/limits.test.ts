@@ -4,9 +4,9 @@ import { LIMIT_MINIMUMS, resolveLimits } from "../src/limits";
 describe("LIMIT_MINIMUMS", () => {
   it("are the minimums in specification 3.4", () => {
     expect(LIMIT_MINIMUMS).toEqual({
-      documentBytes: 2147483647,
+      documentBytes: 268435455,
       depth: 256,
-      tokenBytes: 2147483647,
+      tokenBytes: 268435455,
       runLength: 64,
       elements: 2147483647,
     });

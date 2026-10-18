@@ -27,6 +27,7 @@ invalid/101-signed-date
 invalid/101-single-digit-hour
 invalid/101-string-then-number
 invalid/101-symbol-then-string
+invalid/101-two-quotes-then-text
 invalid/102-angle-not-comment-or-annotation
 invalid/103-leading-point
 invalid/103-legacy-boolean-sigil
@@ -99,6 +100,7 @@ valid/420-keywords
 valid/430-symbols
 valid/440-string-contains-comment-marker
 valid/440-string-embedding-two-levels
+valid/440-string-empty-beside-brackets
 valid/440-string-exact-matching-longer-run-is-content
 valid/440-string-hash-run
 valid/440-string-multiline-verbatim

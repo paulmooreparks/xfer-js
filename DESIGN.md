@@ -88,9 +88,9 @@ export type {
 
 ```ts
 export interface Limits {
-  readonly documentBytes: number;   // default 2**31 - 1
+  readonly documentBytes: number;   // default 2**28 - 1
   readonly depth: number;           // default 256
-  readonly tokenBytes: number;      // default 2**31 - 1
+  readonly tokenBytes: number;      // default 2**28 - 1
   readonly runLength: number;       // default 64
   readonly elements: number;        // default 2**31 - 1
 }
@@ -286,7 +286,7 @@ After trivia, dispatch on the current code point:
 ### 5.3 Repetition string
 
 1. Count the opening run `n` of consecutive `"`. If `n > limits.runLength`: `XFER0604` at the token start, then continue reading the string normally (finding its closer of exactly `n` is linear, and gives better recovery than consuming the rest of the document).
-2. **Empty-string special case:** if `n === 2` and the next character is not `"` (or is end of text), the token is the empty string, length 2.
+2. **The empty string:** if `n === 2`, the token is the empty string, length 2, whatever follows; the separation check then applies, so `""x""` reports `XFER0101` at `x`. (Paul's ruling, 2026-10-18; see section 16.)
 3. Otherwise scan forward from after the opening run. At each `"`, measure the maximal run `r`. If `r === n`, the string ends after that run; content is the text between the runs. If `r !== n`, continue from after the run (those quotes are content). At end of text: `XFER0201` at the token start; the token's content is everything after the opener and the token ends at end of text (recovery: the rest of the document is consumed, as the spec allows).
 4. `delimiter = { form: "rep", run: n }`; `content` is a slice (no copying beyond `substring`).
 5. If the content's byte length exceeds `limits.tokenBytes`: `XFER0603`.
@@ -411,7 +411,7 @@ export function writeString(content: string, runLimit: number): string;
 
 `chooseDelimiter`:
 1. If `content` contains no `"`: `{ rep, 1 }`.
-2. Else if `content` does not start with `"` and does not end with `"`: let `L` be the longest run of `"` in content; `n = L + 1`; if `n > runLimit`, `n` = the smallest positive integer not equal to the length of any quote run in content (collect run lengths into a `Set`, count up from 1). `{ rep, n }`.
+2. Else if `content` does not start with `"` and does not end with `"`: let `L` be the longest run of `"` in content; `n = L + 1`, and `n = 3` if that gives 2, because a run of two quotes is always the empty string and never opens a string; if `n > runLimit`, `n` = the smallest positive integer other than 2 not equal to the length of any quote run in content (collect run lengths into a `Set`, count up from 1, skipping 2). `{ rep, n }`.
 3. Else: let `H` be the longest run of `#` that immediately follows a `"` in content (0 if none); `m = H + 1`; if `m > runLimit`, `m` = the smallest positive integer not equal to any such run length. `{ hash, m }`.
 
 `writeString` renders `"`×n + content + `"`×n, or `#`×m + `"` + content + `"` + `#`×m. Special case: empty content → `""`.
@@ -573,7 +573,7 @@ Step 3 (normalize, unicode, diagnostics, limits) was completed on 2026-10-18. No
 - `isAdmittedNonAscii` was written as rejections, so `NaN`, a fraction or `undefined` passed as an identifier character. It is now an acceptance (`Number.isInteger` and in range), with tests for those values.
 - `positionAt` now stops at the end of the text and never returns a position after a surrogate pair for an index inside it.
 - The diagnostics-table test now also checks that every line of the spec's table parsed, so a badly formatted new row cannot be skipped on both sides.
-- **Pending Paul:** spec 3.4's minimum of 2^31−1 bytes for document size and token length cannot be met by any JavaScript engine (V8 holds about 2^29 UTF-16 units). See the step 4 entry.
+- **Ruled by Paul, 2026-10-18:** spec 3.4's minimum of 2^31−1 bytes for document size and token length could not be met by any JavaScript engine (V8 holds about 2^29 UTF-16 units) or by .NET. Both minimums are now 2^28−1 bytes in the specification and in `LIMIT_MINIMUMS`.
 - The API's severity `"info"` is the spec's "informational". This is a deliberate name, matching common tooling.
 
 Step 4 (lexer) was completed on 2026-10-18, on Opus. Every valid suite document lexes with no diagnostic and is reproduced exactly by its tokens; all 50 invalid cases whose required diagnostics are lexical produce them at the stated positions (so the hand-computed positions in those cases are now verified); and 3,000 seeded random inputs lex without throwing, reproduce exactly, and report every token and trivia position equal to an independent count. The expected-failures list grew to 123 because the suite grew; no case leaves it until the parser exists in step 5, because the conformance runner needs a value and a canonical form.
@@ -581,5 +581,5 @@ Step 4 (lexer) was completed on 2026-10-18, on Opus. Every valid suite document 
 - **Faults found in the specification and suite, fixed upstream** (xferlang commit 55cdffc, following section 15): spec 4.5 listed `.5` and `+1` as `XFER0302` while section 4 and the suite say `XFER0103`; the temporal ranges were missing from 4.6; the rules for `-inf`, signed temporals, uppercase radix prefixes and lowercase `z` were unstated; section 9 did not say positions are in the normalized text; `530-object-minimal-whitespace` contained `c"x"`, which the separation ruling forbids; four invalid cases were named for the wrong code. Seventeen cases were added.
 - **Faults found in this design, corrected in section 5:** the `-inf` rule required a terminator after `inf`, which contradicted the suite (`-infinity` is `XFER0101` at the second `i`); the leading-zero check came before the temporal check, which would have rejected the year `0001` and the hour `09`; a sign did not prevent a temporal, so `-2025-08-01` would have lexed as a date; an uppercase radix prefix was not handled, which would have reported `0XFF` as `0` plus a separation error instead of `XFER0302`; and a delimiter run over the limit treated the rest of the document as one string, where reading on to the exact closer recovers better.
 - **Hints.** A character people bring from other formats (comma, colon, apostrophe, parenthesis, `+`, a leading point, `~`, `?`) gets a hint in its diagnostic. The hint appears whether the character fails the separation rule (`[ 1, 2 ]`) or cannot begin a token (`( 1 )`).
-- **Pending Paul, blocking two string cases.** The specification's empty-string rule ("exactly two quotes followed by anything other than a quote") contradicts its own `""...""` examples: by that rule `""He said "hello" and left.""` is the empty string followed by `He`. The lexer implements what the suite as written requires (two quotes followed by a terminator are the empty string) in one method, `emptyStringEnds`, until Paul rules.
-- **Pending Paul, the size minimums.** See the review entry above.
+- **Ruled by Paul, 2026-10-18: a run of exactly two quotes is always the empty string.** The specification's rule ("exactly two quotes followed by anything other than a quote") contradicted its own `""...""` examples: by that rule `""He said "hello" and left.""` is the empty string followed by `He`. Of the three fixes offered, Paul chose this one: a string whose content contains a quote opens with one quote or with three or more, so `""` is never ambiguous and a slip fails loudly. The specification, grammar, canonical rule, README and the suite's `""...""` cases were updated (xferlang, the commit after 55cdffc), and section 9's choice rule now skips 2. The rejected alternative, `""` empty only before a terminator, would have parsed a slip silently as different values and needed another canonical special case.
+- **Ruled by Paul, 2026-10-18: the size minimums are 2^28−1 bytes.** See the review entry above.

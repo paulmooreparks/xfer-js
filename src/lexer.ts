@@ -339,22 +339,14 @@ export class Lexer {
 
   // Strings (specification 4.4).
 
-  /**
-   * When a maximal run of exactly two quotes is the empty string rather than the opening of a
-   * string. PENDING A RULING (DESIGN.md section 16): the specification's rule, "followed by
-   * anything other than a quote", contradicts its own `""...""` examples. This implements what
-   * the suite as written requires: the empty string when the run is followed by a terminator.
-   */
-  private emptyStringEnds(): boolean {
-    return this.atTerminator();
-  }
-
   private repetitionString(startIndex: number, start: Position, leading: readonly Trivia[]): Token {
     const n = this.run(QUOTE);
     if (n > this.limits.runLength) {
       this.report("XFER0604", start, `a run of ${n} quotes`);
     }
-    if (n === 2 && this.emptyStringEnds()) {
+    // A run of exactly two quotes is the empty string, whatever follows; it never opens a
+    // string, so `""x""` is the empty string and then a separation error at `x`.
+    if (n === 2) {
       const delimiter: Delimiter = { form: "rep", run: 1 };
       return this.scalar(
         this.make("string", startIndex, start, leading, { content: "", delimiter }),

@@ -2,9 +2,9 @@ import type { Limits } from "./types";
 
 /** The minimums every conformant parser must accept (specification 3.4), and the defaults. */
 export const LIMIT_MINIMUMS: Limits = Object.freeze({
-  documentBytes: 2 ** 31 - 1,
+  documentBytes: 2 ** 28 - 1,
   depth: 256,
-  tokenBytes: 2 ** 31 - 1,
+  tokenBytes: 2 ** 28 - 1,
   runLength: 64,
   elements: 2 ** 31 - 1,
 });
