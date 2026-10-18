@@ -659,3 +659,13 @@ Tests added for each, plus exact-diagnostic-list tests, a Unicode property test,
 ### Step 8: the CLI
 
 `cli/main.ts` implements section 10 as designed: `validate`, `fmt` (with `--write`), `canon`, `to-json` (`--pretty`, `--stringify-big-ints`), `from-json`, `--json` on every command, `--version`, `--help`. Choices beyond the design: informational diagnostics (`XFER0903`, `XFER0904`) are hidden in the GNU format and shown with `--json`; stdin is shown as `<stdin>` in diagnostics; every file is read before any is processed, so an unreadable file is exit 2 with no partial output; `fmt --write` needs file names; `to-json` still prints its JSON when the only error is an `inf` or `nan` (as the spec says, the output has `null` there) and exits 1; `from-json` and `canon` refuse input that would make `canonical` throw (too deep, too large) with exit 1. `test/cli.test.ts` needs the build, so it has its own config (`vitest.cli.config.ts`, run by `npm run test:cli`) and is excluded from `npm test`, which runs before the build in CI. No separate Opus review was run for this step; it is a thin layer over reviewed library calls, and step 9's smoke tests exercise it again.
+
+### Step 9: hardening and packaging
+
+- **Coverage:** 97.9% of lines (floor 95%, enforced by a `coverage` CI job running `npm run coverage`).
+- **`smoke/run.mjs`:** a framework-free runner over the built `dist/index.js` that runs the valid, invalid and byte cases (canonical form, idempotence, diagnostic codes) and both JSON corpora, using only `node:fs`. CI runs it on Node 18, Node 20, Deno and Bun after a build on Node 24, and pipes a document through the CLI on the Node legs. It does not check the value model or the tree. It requires at least 400 checks so that an empty suite cannot pass.
+- **Runtime floor:** `engines` stays `>=18` on the strength of those jobs; if the Node 18 leg fails, the floor moves to 20 and the README says so.
+- **typedoc:** `npm run docs` builds `docs/` (ignored by git and Biome); the `check` job builds it with warnings as errors. Publishing it to Pages is left until the site exists.
+- **Size budget:** 45 kB (measured 40.46 kB, plus about ten percent).
+- **`release.yml`:** changesets opens the version pull request and publishes with provenance under npm trusted publishing. It cannot succeed until the package is no longer `private` and the npm side is configured (step 10, which needs Paul).
+- **README** rewritten for users, with the example document checked against the parser.

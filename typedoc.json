@@ -1,0 +1,10 @@
+{
+  "entryPoints": ["src/index.ts"],
+  "tsconfig": "tsconfig.json",
+  "out": "docs",
+  "name": "xferlang",
+  "readme": "README.md",
+  "excludePrivate": true,
+  "treatWarningsAsErrors": true,
+  "validation": { "notExported": true, "invalidLink": true, "notDocumented": false }
+}

@@ -38,7 +38,7 @@
     {
       "name": "core, ESM, minified",
       "path": "dist/index.js",
-      "limit": "50 kB",
+      "limit": "45 kB",
       "gzip": false,
       "brotli": false
     }
@@ -51,6 +51,8 @@
     "coverage": "vitest run --coverage --passWithNoTests",
     "check": "npm run lint && npm run typecheck && npm run test",
     "build": "tsdown",
+    "docs": "typedoc",
+    "smoke": "node smoke/run.mjs",
     "size": "size-limit",
     "suite:update": "git submodule update --remote --merge suite",
     "suite:cases": "node test/list-cases.ts"
@@ -64,6 +66,7 @@
     "fast-check": "4.10.2",
     "size-limit": "14.2.0",
     "tsdown": "0.22.2",
+    "typedoc": "0.28.20",
     "typescript": "6.0.3",
     "vitest": "5.0.5"
   }
