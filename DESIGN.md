@@ -346,7 +346,7 @@ export function isAdmittedNonAscii(cp: number): boolean;    // cp >= 0x80 and no
 export function utf8Length(cp: number): 1 | 2 | 3 | 4;
 ```
 
-Excluded (spec 4.3): U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF; U+200B to U+200F, U+202A to U+202E, U+2060 to U+2064, U+2066 to U+2069. Implement as a sorted array of `[lo, hi]` pairs and a linear scan (fourteen ranges; no table generation, no Unicode version dependency). Surrogate code points cannot occur after normalization.
+Excluded (spec 4.3): U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF; U+200B to U+200F, U+202A to U+202E, U+2060 to U+2064, U+2066 to U+2069. Implement as a sorted array of `[lo, hi]` pairs and a linear scan (thirteen ranges, kept unmerged as the specification lists them; no table generation, no Unicode version dependency). Surrogate code points cannot occur after normalization.
 
 ## 7. Parser (`src/parser.ts`)
 
@@ -555,3 +555,13 @@ Step 2 (harness) was completed on 2026-10-18. What it decided and found:
 - **`src/types.ts` was written in full** from section 3, because the harness helpers need it. `parse`, `parseValue` and `canonical` exist as stubs that throw `not implemented`, so the harness imports the real public API; `src/index.ts` exports them and all the types. `DiagnosticCode` is a template-literal type until step 3 narrows it to the specification's table.
 - **`test/lossless.ts` and `test/tagged.ts` are iterative,** as section 1 requires of the tagged-value helper; a unit test nests a hundred thousand levels.
 - **`npm run suite:cases` lists every case id** by running a TypeScript file directly under Node's type stripping, which is on by default in Node 22.18 and later and prints an experimental warning to stderr on 24.4.
+
+Step 3 (normalize, unicode, diagnostics, limits) was completed on 2026-10-18. No conformance case can pass before the lexer, so the expected-failures list is unchanged at 106. What it decided:
+
+- **Two checks tie the code to the specification text.** `test/unicode.test.ts` reads the exclusion sentence in specification 4.3, expands it to its 38 code points, and compares `isAdmittedNonAscii` with it for every code point from U+0080 to U+10FFFF. `test/diagnostics.test.ts` parses the diagnostic table in specification section 10 and compares `DIAGNOSTICS` with it row for row, and checks that every code the suite requires is in the table. Each was verified to fail when the code is deliberately wrong (an exclusion range shortened by one, a summary reworded). A spec change to either now fails this repository's build until the code follows.
+- **`DiagnosticCode` is the union of the table's keys,** `keyof typeof DIAGNOSTICS`, and `types.ts` re-exports it. A diagnostic cannot be built with a code the specification does not define.
+- **Additions to the design's module list.** `src/position.ts` holds `ORIGIN` and `positionAt(text, index)`, which `normalize` needs to report a lone surrogate at its real line and column; the lexer tracks its position incrementally and will not use it for ordinary tokens. `src/unicode.ts` gained `isWhitespace` (specification 3.3, which the lexer needs) and `utf8ByteLength`.
+- **Position rules in `normalize`.** Invalid UTF-8 in byte input is reported at offset 0, line 1, column 1, because the platform decoder does not say where it failed. A lone surrogate in string input is reported at its own position, with the offset in UTF-8 bytes and the column in scalar values, measured in the normalized text (after the byte order mark and CR are handled), which is how section 12 item 1 says positions are measured. The design had said "scalar-value offset", which would not have been a `Position`.
+- **The size limit is measured on the input as supplied,** before the byte order mark is removed and line endings change, and before decoding, so oversized invalid input reports `XFER0601`.
+- **Limits.** `resolveLimits` treats a value that is below the minimum or not a number (including `NaN`, a string or `null`) as unset, and returns a frozen object. An infinite value is accepted, as "no limit".
+- **Still to add to the specification,** per section 12: `XFER0906` for malformed JSON, and the two annotation codes if the spec wants them. Neither is needed until steps 5 and 7.

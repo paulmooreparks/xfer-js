@@ -11,8 +11,9 @@ export interface Position {
 
 export type Severity = "error" | "warning" | "info";
 
-// Narrowed to the codes in the specification's table when diagnostics.ts is written.
-export type DiagnosticCode = `XFER${string}`;
+import type { DiagnosticCode } from "./diagnostics";
+
+export type { DiagnosticCode };
 
 export interface Diagnostic {
   readonly code: DiagnosticCode;
