@@ -173,10 +173,12 @@ describe("reconstruct", () => {
             key: tok("identifier", "a", " "),
             value: { kind: "scalar", token: tok("integer", "1", " "), annotations: [] },
             annotations: [],
+            skipped: [],
           },
         ],
         annotations: [],
       },
+      trailing: [],
       eof: tok("eof", ""),
       text: "{ a 1 }",
     };
@@ -205,6 +207,7 @@ describe("reconstruct", () => {
         items: [],
         annotations: [],
       },
+      trailing: [],
       eof: tok("eof", ""),
       text: "<! xfer 1 !>\n[ ]",
     };

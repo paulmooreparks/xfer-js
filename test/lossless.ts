@@ -10,6 +10,10 @@ type Item =
 export function tokensInOrder(doc: Document): Token[] {
   const out: Token[] = [];
   const stack: Item[] = [{ t: "token", token: doc.eof }];
+  // Pushed in reverse, so that the trailing tokens come out in order, before the eof token.
+  for (let i = doc.trailing.length - 1; i >= 0; i--) {
+    stack.push({ t: "token", token: doc.trailing[i] as Token });
+  }
   if (doc.root) {
     stack.push({ t: "node", node: doc.root });
   }
@@ -34,10 +38,10 @@ export function tokensInOrder(doc: Document): Token[] {
         break;
       case "annotation": {
         const a = item.annotation;
-        const parts: Item[] = [
-          { t: "token", token: a.open },
-          { t: "token", token: a.name },
-        ];
+        const parts: Item[] = [{ t: "token", token: a.open }];
+        if (a.name) {
+          parts.push({ t: "token", token: a.name });
+        }
         if (a.value) {
           parts.push({ t: "node", node: a.value });
         }
@@ -49,7 +53,17 @@ export function tokensInOrder(doc: Document): Token[] {
       }
       case "pair": {
         const p = item.pair;
-        const parts: Item[] = [...annotations(p.annotations), { t: "token", token: p.key }];
+        const parts: Item[] = annotations(p.annotations);
+        if (p.key) {
+          parts.push({ t: "token", token: p.key });
+        }
+        for (const skipped of p.skipped) {
+          parts.push(
+            "kind" in skipped
+              ? { t: "token", token: skipped }
+              : { t: "annotation", annotation: skipped },
+          );
+        }
         if (p.value) {
           parts.push({ t: "node", node: p.value });
         }

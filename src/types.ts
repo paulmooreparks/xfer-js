@@ -153,15 +153,27 @@ export interface Token {
 
 export interface AnnotationNode {
   readonly open: Token;
-  readonly name: Token;
+  /** Absent only in a malformed annotation that has no name. */
+  readonly name: Token | undefined;
   readonly value: Node | undefined;
+  /** Absent only in a malformed annotation that is never closed. */
   readonly close: Token | undefined;
 }
 
 export interface PairNode {
-  readonly key: Token;
+  /**
+   * Absent only when annotations were left with no key to attach to, or when a bracket stood
+   * where a key belongs. Both have a diagnostic.
+   */
+  readonly key: Token | undefined;
   readonly value: Node | undefined;
   readonly annotations: readonly AnnotationNode[];
+  /**
+   * What stood between the key and the value and belongs to neither, in source order: stray
+   * separators (a `,` or `:` carried over from another format) and annotations placed after the
+   * key. Each has a diagnostic; they are kept so the tree stays lossless.
+   */
+  readonly skipped: readonly (Token | AnnotationNode)[];
 }
 
 export type Node =
@@ -194,6 +206,8 @@ export interface Document {
   /** The xfer head annotation, when the source had one. */
   readonly head: AnnotationNode | undefined;
   readonly root: Node | undefined;
+  /** Tokens after the root element, kept so the tree stays lossless. Non-empty only with XFER0402. */
+  readonly trailing: readonly Token[];
   /** Its leading trivia is the document's trailing trivia. */
   readonly eof: Token;
   /** The normalized text. */
