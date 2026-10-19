@@ -672,7 +672,7 @@ Tests added for each, plus exact-diagnostic-list tests, a Unicode property test,
 - **`release.yaml`:** changesets opens the version pull request and publishes with provenance under npm trusted publishing. It cannot succeed until the package is no longer `private` and the npm side is configured (step 10, which needs Paul).
 - **README** rewritten for users, with the example document checked against the parser.
 
-The release workflow file is `release.yaml`, not `release.yml`: npm's trusted publisher entry matches the workflow file name exactly, and the entry was saved with the `.yaml` spelling. Changesets CLI 3 stores pending pre-release changesets under `.changeset/pre/`, which `changesets/action@v1` cannot read, so the workflow uses `@v2` (whose inputs are `version-script`, `publish-script`, `pr-title` and `commit-message`).
+The release workflow file is `release.yaml`, not `release.yml`: npm's trusted publisher entry matches the workflow file name exactly, and the entry was saved with the `.yaml` spelling. Changesets CLI 3 moves the changesets a pre-release has consumed into `.changeset/pre/`, a layout `changesets/action@v1` cannot read, so the workflow uses `@v2` (whose inputs are `version-script`, `publish-script`, `pr-title` and `commit-message`). A new changeset goes in `.changeset/` itself, as `npx changeset` writes it; one put in `.changeset/pre/` by hand counts as already released, and the workflow then reports "No changesets found" and opens no version pull request (2026-10-20, the first attempt at 0.1.0-next.4).
 
 ### After 0.1.0-next.3: decisions from the xfer-dotnet step 9 review
 
