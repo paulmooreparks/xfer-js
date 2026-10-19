@@ -309,6 +309,29 @@ describe("limits", () => {
     expect(canonical(nest(256)).length).toBeGreaterThan(100_000);
   });
 
+  it("counts an empty collection as a level, so the output never has more levels than a parser at the limit accepts", () => {
+    const innermostEmpty = (depth: number): XferValue => {
+      let value: XferValue = seq();
+      for (let i = 1; i < depth; i++) {
+        value = seq(value);
+      }
+      return value;
+    };
+    expect(() => canonical(innermostEmpty(257))).toThrow(/nested more than 256/);
+    expect(parse(canonical(innermostEmpty(256))).ok).toBe(true);
+    expect(() => canonical(innermostEmpty(4), { limits: { depth: 3 } })).toThrow(XferError);
+  });
+
+  it("counts the head and the final line feed towards the document size", () => {
+    const limits = { documentBytes: 6 };
+    expect(canonical(str("aaa"), { limits })).toBe('"aaa"\n'); // exactly 6 bytes
+    expect(() => canonical(str("aaaa"), { limits })).toThrow(XferError);
+    const headed = parse("<! xfer 1 !> 1");
+    expect(() => canonical(headed, { limits })).toThrow(XferError);
+    expect(canonical(headed, { limits: { documentBytes: 15 } })).toBe("<! xfer 1 !>\n1\n");
+    expect(() => canonical(headed, { limits: { documentBytes: 14 } })).toThrow(XferError);
+  });
+
   it("takes the depth limit it is given, so a result parsed with raised limits can be written", () => {
     const limits = { depth: 3000 };
     const result = parse("[".repeat(3000) + "]".repeat(3000), { limits });

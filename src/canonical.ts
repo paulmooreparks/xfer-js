@@ -215,14 +215,15 @@ function writeValue(root: XferValue, ctx: Context): string {
     }
     const isObject = value.kind === "object";
     const members = isObject ? [...value.entries.values()] : value.items;
+    // The output grows with the square of the depth, so the depth limit also bounds the output.
+    // An empty collection counts too: it is a level that a parser at the limit would refuse.
+    if (stack.length >= ctx.depthLimit) {
+      throw new XferError([], `the value is nested more than ${ctx.depthLimit} levels deep`);
+    }
     if (members.length === 0) {
       put(isObject ? "{}" : "[]");
       finishItem();
       return;
-    }
-    // The output grows with the square of the depth, so the depth limit also bounds the output.
-    if (stack.length >= ctx.depthLimit) {
-      throw new XferError([], `the value is nested more than ${ctx.depthLimit} levels deep`);
     }
     put(isObject ? "{" : "[", "\n");
     stack.push({
@@ -301,7 +302,8 @@ export function canonical(input: XferValue | ParseResult, options?: CanonicalOpt
     maxChars: limits.documentBytes,
     trusted,
     ids: new Set(),
-    size: 0,
+    // The head and the final line feed count towards the document size too.
+    size: (head ? "<! xfer 1 !>\n".length : 0) + 1,
   };
   return `${head ? "<! xfer 1 !>\n" : ""}${writeValue(value, ctx)}\n`;
 }
