@@ -1,10 +1,26 @@
 {
   "name": "xferlang",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0-next.0",
   "description": "XferLang 1.0 for JavaScript and TypeScript: a data format with no escape sequences, typed values and line-independent syntax. Parser, canonical writer, JSON mapping and command line tool.",
   "license": "MIT",
   "author": "Paul M. Parks",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paulmooreparks/xfer-js.git"
+  },
+  "homepage": "https://xfer.parkscomputing.com",
+  "bugs": {
+    "url": "https://github.com/paulmooreparks/xfer-js/issues"
+  },
+  "keywords": [
+    "xferlang",
+    "xfer",
+    "data-format",
+    "parser",
+    "serialization",
+    "json",
+    "configuration"
+  ],
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -27,7 +43,8 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "xfer": "./dist/cli.mjs"
+    "xfer": "dist/cli.mjs",
+    "xferlang": "dist/cli.mjs"
   },
   "files": [
     "dist",
@@ -69,5 +86,9 @@
     "typedoc": "0.28.20",
     "typescript": "6.0.3",
     "vitest": "5.0.5"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": false
   }
 }

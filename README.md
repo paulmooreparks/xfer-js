@@ -6,7 +6,7 @@ The package has no runtime dependencies and runs unchanged in Node, browsers, De
 
 The specification and its conformance suite live in the [xferlang](https://github.com/paulmooreparks/xferlang) repository, which this repository includes as the `suite` submodule. This package passes every case in the suite.
 
-The package is not published yet; the first release will be `0.1.0` on the `next` tag.
+The package is not published yet; the first release, `0.1.0-next.0`, is on the `next` tag.
 
 ## A document
 
