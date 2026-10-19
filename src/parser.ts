@@ -128,8 +128,14 @@ function keyText(token: Token): string {
   return token.kind === "string" ? (token.content ?? "") : token.text;
 }
 
+/** At most 21 UTF-16 units and "...", never cutting a surrogate pair in two. */
 function shorten(text: string): string {
-  return text.length > 24 ? `${text.slice(0, 21)}...` : text;
+  if (text.length <= 24) {
+    return text;
+  }
+  const last = text.charCodeAt(20);
+  const cut = last >= 0xd800 && last <= 0xdbff ? 20 : 21;
+  return `${text.slice(0, cut)}...`;
 }
 
 function describe(node: Node | undefined): string {

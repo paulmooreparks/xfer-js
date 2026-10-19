@@ -277,6 +277,15 @@ describe("keys and values in objects", () => {
     expect(d?.message).not.toContain("k0=");
   });
 
+  it("shorten a long key in a message without cutting a surrogate pair in two", () => {
+    const key = "😀".repeat(15);
+    const [d] = parse(`{ "${key}" 1 x }`).diagnostics;
+    expect(d?.code).toBe("XFER0404");
+    // The message is well-formed text: no lone surrogate where the key was cut.
+    expect(d?.message.isWellFormed()).toBe(true);
+    expect(d?.message).toContain(`${"😀".repeat(10)}...`);
+  });
+
   it("read a string key and a bare key as the same key", () => {
     expect(codes('{ a 1 "a" 2 }')).toEqual(["XFER0403"]);
     expect(codes('{ "first name" 1 "first name" 2 }')).toEqual(["XFER0403"]);
