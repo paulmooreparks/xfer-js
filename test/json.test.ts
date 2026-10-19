@@ -15,6 +15,12 @@ import {
 import { loadCases } from "./cases.ts";
 import { loadFromJsonCases, loadToJsonCases } from "./json-cases.ts";
 
+/** The text of a conversion that must not have been refused for length. */
+function defined(text: string | undefined): string {
+  expect(text).toBeDefined();
+  return text as string;
+}
+
 describe("toJson conformance", () => {
   for (const c of loadToJsonCases()) {
     it(c.id, () => {
@@ -25,7 +31,7 @@ describe("toJson conformance", () => {
       for (const want of c.codes) {
         expect(codes.has(want), `missing ${want}`).toBe(true);
       }
-      expect(() => JSON.parse(text)).not.toThrow();
+      expect(() => JSON.parse(defined(text))).not.toThrow();
     });
   }
 });
@@ -53,7 +59,7 @@ describe("toJson", () => {
   it("indents when asked, as JSON.stringify does", () => {
     const value = parseValue("{ a [ 1 2 ] b { } c [ ] d { e null } }");
     const { text } = toJson(value, { indent: 2 });
-    expect(text).toBe(JSON.stringify(JSON.parse(text), null, 2));
+    expect(text).toBe(JSON.stringify(JSON.parse(defined(text)), null, 2));
   });
 
   it("reports a pointer and a count, not a diagnostic per value", () => {
@@ -61,6 +67,24 @@ describe("toJson", () => {
     const { diagnostics } = toJson(value);
     expect(diagnostics.map((d) => d.code)).toEqual(["XFER0903", "XFER0904"]);
     expect(diagnostics[0]?.message).toContain("3 symbols, first at /0");
+  });
+
+  it("refuses text longer than the document size limit, with XFER0601 and no text", () => {
+    const value = parseValue("[ 1 2 3 ]");
+    expect(toJson(value, { limits: { documentBytes: 7 } }).text).toBe("[1,2,3]");
+    const refused = toJson(value, { limits: { documentBytes: 6 } });
+    expect(refused.text).toBeUndefined();
+    expect(refused.diagnostics.map((d) => d.code)).toEqual(["XFER0601"]);
+    expect(refused.diagnostics[0]?.message).toContain("longer than 6 characters");
+  });
+
+  it("refuses indented text that grows past the limit long before a string would fail", () => {
+    // 250 levels of indentation around a million items: about 550 million characters indented.
+    const deep = `${"[".repeat(250)}${"1 ".repeat(1_000_000)}${"]".repeat(250)}`;
+    const value = parseValue(deep);
+    const result = toJson(value, { indent: 2 });
+    expect(result.text).toBeUndefined();
+    expect(result.diagnostics.map((d) => d.code)).toEqual(["XFER0601"]);
   });
 
   it("escapes pointer tokens", () => {
@@ -75,7 +99,7 @@ describe("toJson", () => {
       value = { kind: "sequence", items: [value] };
     }
     const { text } = toJson(value);
-    expect(text.length).toBe(depth * 2 + 4);
+    expect(defined(text).length).toBe(depth * 2 + 4);
   });
 
   it("writes exactly the diagnostics the value calls for", () => {
@@ -158,7 +182,7 @@ describe("fromJson", () => {
           return;
         }
         const back = toJson(parseValue(canonical(read.value))).text;
-        expect(JSON.parse(back)).toEqual(JSON.parse(text));
+        expect(JSON.parse(defined(back))).toEqual(JSON.parse(text));
       }),
       { numRuns: 5000 },
     );
@@ -228,7 +252,7 @@ describe("fromJson", () => {
         } else {
           expect(diagnostics).toEqual([]);
           const back = toJson(parseValue(canonical(value as XferValue))).text;
-          expect(JSON.parse(back)).toEqual(JSON.parse(text));
+          expect(JSON.parse(defined(back))).toEqual(JSON.parse(text));
         }
       }),
       { numRuns: 5000 },
@@ -262,7 +286,7 @@ describe("every valid suite document", () => {
       if (diagnostics.some((d) => d.severity === "error")) {
         continue; // inf, -inf and nan have no JSON form
       }
-      const back = fromJson(text).value;
+      const back = fromJson(defined(text)).value;
       expect(back, c.id).toBeDefined();
       const want = toPlain(value, { integers: "bigint" });
       const got = toPlain(back as XferValue, { integers: "bigint" });

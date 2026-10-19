@@ -239,6 +239,12 @@ export interface FromJsonOptions {
 export interface ToJsonOptions {
   readonly stringifyBigInts?: boolean;
   readonly indent?: number;
+  /**
+   * Only `documentBytes` applies: JSON text longer than it, counted in UTF-16 code units as the
+   * canonical writer counts, is refused with XFER0601 (specification 8.1). Defaults to the
+   * specification's minimum.
+   */
+  readonly limits?: Partial<Limits>;
 }
 
 export interface PlainOptions {

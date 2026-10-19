@@ -222,7 +222,7 @@ export function canonical(input: XferValue | ParseResult, options?: CanonicalOpt
 // it cannot say whether the parse that made it had an error (section 16, step 6).
 
 export interface ToJsonOptions { readonly stringifyBigInts?: boolean; readonly indent?: number; }
-export function toJson(value: XferValue, options?: ToJsonOptions): { readonly text: string; readonly diagnostics: readonly Diagnostic[] };
+export function toJson(value: XferValue, options?: ToJsonOptions): { readonly text: string | undefined; readonly diagnostics: readonly Diagnostic[] }; // text is undefined when refused with XFER0601 (spec 8.1)
 // Returns JSON text, not a JS value, so integers beyond 2**53 are written at full precision.
 
 export function fromJson(text: string): { readonly value: XferValue | undefined; readonly diagnostics: readonly Diagnostic[] };
@@ -442,6 +442,8 @@ xfer --version | --help
 - Diagnostics print to stderr in GNU format: `FILE:LINE:COL: error XFER0404: message` (`-` for stdin). With `--json`, one JSON object per diagnostic per line, fields as in `Diagnostic` plus `file`.
 - Exit codes: 0 success with no error diagnostics; 1 at least one error diagnostic in any input; 2 usage error or unreadable file (message to stderr).
 - `fmt --write` writes only if the canonical text differs from the input bytes, and never writes a file whose parse had errors.
+- Each file's output is written as soon as it is made. A failed write to standard output is exit 2 with `xfer: cannot write standard output`; a failed write to standard error is exit 2.
+- Standard streams closed before the CLI starts, and Windows file names other than ordinary paths to a regular file, are outside what this CLI promises to do as xfer-dotnet does (section 16, after 0.1.0-next.3).
 
 `test/cli.test.ts` spawns `node dist/cli.mjs` on suite documents and asserts output and exit codes; it is the only test that needs the build.
 
@@ -671,3 +673,12 @@ Tests added for each, plus exact-diagnostic-list tests, a Unicode property test,
 - **README** rewritten for users, with the example document checked against the parser.
 
 The release workflow file is `release.yaml`, not `release.yml`: npm's trusted publisher entry matches the workflow file name exactly, and the entry was saved with the `.yaml` spelling. Changesets CLI 3 stores pending pre-release changesets under `.changeset/pre/`, which `changesets/action@v1` cannot read, so the workflow uses `@v2` (whose inputs are `version-script`, `publish-script`, `pr-title` and `commit-message`).
+
+### After 0.1.0-next.3: decisions from the xfer-dotnet step 9 review
+
+The xfer-dotnet differential test compares this CLI with the .NET one byte for byte, and its review found four places where they differed. Paul ruled on 2026-10-20, each as recommended (xfer-dotnet `DESIGN.md` section 16, items 5 to 8):
+
+- **`toJson` has an output bound.** Spec 8.1 now lets a JSON converter refuse text past the document size limit (xferlang `4788b52`). `toJson` counts UTF-16 code units as `canonical` does, and past `limits.documentBytes` it returns no text and the single diagnostic `XFER0601`. Before this, `to-json --pretty` on a 2.2 MB document failed with `RangeError` past V8's string limit.
+- **The CLI writes each file's output as soon as it is made,** so no string holds the output of several files; three 1.8 MB documents through one `fmt` no longer fail.
+- **A failed write is exit 2.** On an `error` event from standard output (a reader that went away, a full disk) the CLI prints `xfer: cannot write standard output` once and exits 2; on one from standard error it exits 2. The event may arrive after `main` has returned, so the handlers set the exit code and `main`'s code yields to it.
+- **The contract with xfer-dotnet** does not cover standard streams that are closed before the CLI starts (Node reopens them on `/dev/null`, which is not documented and not what .NET does), or Windows file names that are not ordinary paths to a regular file (trailing separators, dots or spaces, and device names, where libuv and .NET differ).

@@ -137,6 +137,9 @@ function process1(
         ...(options.pretty ? { indent: 2 } : {}),
       });
       report(file, converted.diagnostics, options.json);
+      if (converted.text === undefined) {
+        return { ok: false }; // refused as longer than the document size limit (XFER0601)
+      }
       out.push(`${converted.text}\n`);
       return { ok: !converted.diagnostics.some((d) => d.severity === "error") };
     }
@@ -174,11 +177,11 @@ function main(args: readonly string[]): number {
   }
   const first = args[0] as string;
   if (first === "--help" || first === "-h") {
-    process.stdout.write(USAGE);
+    writeStdout(USAGE);
     return 0;
   }
   if (first === "--version") {
-    process.stdout.write(`${version()}\n`);
+    writeStdout(`${version()}\n`);
     return 0;
   }
   const allowed = COMMAND_OPTIONS[first];
@@ -232,13 +235,17 @@ function main(args: readonly string[]): number {
   }
 
   let allOk = true;
-  const out: string[] = [];
   for (const { file, bytes } of inputs) {
-    const before = out.length;
+    // Each file's output is written as soon as it is made, never joined with the others, so no
+    // string has to hold the output of every file.
+    const out: string[] = [];
     const result = process1(first, file === "-" ? "<stdin>" : file, bytes, options, out);
     allOk &&= result.ok;
-    if (options.write && result.ok && result.output !== undefined) {
-      out.length = before; // --write never prints
+    if (!options.write) {
+      for (const text of out) {
+        writeStdout(text);
+      }
+    } else if (result.ok && result.output !== undefined) {
       const same =
         bytes.length === Buffer.byteLength(result.output) &&
         Buffer.compare(Buffer.from(bytes), Buffer.from(result.output)) === 0;
@@ -251,14 +258,36 @@ function main(args: readonly string[]): number {
       }
     }
   }
-  if (out.length > 0) {
-    process.stdout.write(out.join(""));
-  }
   return allOk ? 0 : 1;
 }
 
+// A failed write to standard output or standard error (a closed pipe, a full disk) is exit 2,
+// whatever the documents said. The streams report it as an "error" event, which may come after
+// main has returned, so the handlers set the exit code themselves and main's code yields to it.
+let failedWrite = false;
+process.stdout.on("error", () => {
+  if (!failedWrite) {
+    process.stderr.write("xfer: cannot write standard output\n");
+  }
+  failedWrite = true;
+  process.exitCode = 2;
+});
+process.stderr.on("error", () => {
+  failedWrite = true;
+  process.exitCode = 2;
+});
+
+function writeStdout(text: string): void {
+  if (!process.stdout.destroyed) {
+    process.stdout.write(text);
+  }
+}
+
 try {
-  process.exitCode = main(process.argv.slice(2));
+  const code = main(process.argv.slice(2));
+  if (!failedWrite) {
+    process.exitCode = code;
+  }
 } catch (e) {
   if (e instanceof UsageError) {
     process.stderr.write(`xfer: ${e.message}\n`);
