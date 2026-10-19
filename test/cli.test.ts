@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -132,6 +132,30 @@ describe("xfer CLI", () => {
     const a = file("a.xfer", "1");
     const b = file("b.xfer", "[ 2 ]");
     expect(xfer(["to-json", a, b]).out).toBe("1\n[2]\n");
+  });
+
+  it("refuses to-json output longer than the document size limit, printing nothing", () => {
+    // Indentation makes this 2.2 MB document about 550 million characters of JSON.
+    const path = file("deep.xfer", `${"[".repeat(250)}${"1 ".repeat(1_000_000)}${"]".repeat(250)}`);
+    const r = xfer(["to-json", "--pretty", path]);
+    expect(r.code).toBe(1);
+    expect(r.out).toBe("");
+    expect(r.err).toContain("XFER0601");
+  });
+
+  it("exits 2 when standard output cannot be written", async () => {
+    const path = file("many.xfer", `[${" 1".repeat(200_000)} ]`);
+    const child = spawn(process.execPath, [CLI, "fmt", path], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let err = "";
+    child.stderr.setEncoding("utf8").on("data", (d: string) => {
+      err += d;
+    });
+    child.stdout.destroy(); // the reader goes away, as `| head -c 10` does
+    const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
+    expect(code).toBe(2);
+    expect(err).toContain("xfer: cannot write standard output");
   });
 
   it("accepts - for stdin and -- before a file name that starts with a dash", () => {

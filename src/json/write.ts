@@ -1,4 +1,5 @@
 import { makeDiagnostic } from "../diagnostics";
+import { resolveLimits } from "../limits";
 import { ORIGIN } from "../position";
 import type { Diagnostic, ToJsonOptions, XferValue } from "../types";
 
@@ -88,11 +89,16 @@ function openFrame(
  * Diagnostics have no source position (they are about a value, specification 8.1), so each
  * carries the origin and says where it applies as a JSON Pointer in the message. XFER0903 and
  * XFER0904 are reported once, with a count.
+ *
+ * Text longer than the document size limit is refused: `text` is then undefined and the only
+ * diagnostic is XFER0601. Indentation makes the text grow with the nesting depth, so a short
+ * document can have JSON text longer than a string can hold.
  */
 export function toJson(
   value: XferValue,
   options?: ToJsonOptions,
-): { readonly text: string; readonly diagnostics: readonly Diagnostic[] } {
+): { readonly text: string | undefined; readonly diagnostics: readonly Diagnostic[] } {
+  const maxChars = resolveLimits(options?.limits).documentBytes;
   const stringify = options?.stringifyBigInts === true;
   const requested = options?.indent;
   // As JSON.stringify does: a whole number of spaces, at most 10.
@@ -105,6 +111,19 @@ export function toJson(
   let firstTemporal = "";
   const out: string[] = [];
   const stack: Frame[] = [];
+  let size = 0;
+  let tooLong = false;
+
+  // Every piece of output goes through here, so the text is never built past the limit.
+  const put = (...parts: string[]): void => {
+    for (const part of parts) {
+      size += part.length;
+      out.push(part);
+    }
+    if (size > maxChars) {
+      tooLong = true;
+    }
+  };
 
   const newline = (depth: number): string =>
     indent === 0 ? "" : `\n${" ".repeat(indent * depth)}`;
@@ -116,22 +135,22 @@ export function toJson(
       case "sequence": {
         const empty = v.kind === "object" ? v.entries.size === 0 : v.items.length === 0;
         if (empty) {
-          out.push(v.kind === "object" ? "{}" : "[]");
+          put(v.kind === "object" ? "{}" : "[]");
           return false;
         }
-        out.push(v.kind === "object" ? "{" : "[");
+        put(v.kind === "object" ? "{" : "[");
         stack.push(openFrame(v, pointer));
         return true;
       }
       case "string":
-        out.push(quote(v.value));
+        put(quote(v.value));
         return false;
       case "integer": {
         const big = v.value > SAFE || v.value < -SAFE;
         if (big) {
           diagnostics.push(makeDiagnostic("XFER0901", ORIGIN, ORIGIN, `${where(pointer)}`));
         }
-        out.push(big && stringify ? `"${v.value}"` : v.value.toString());
+        put(big && stringify ? `"${v.value}"` : v.value.toString());
         return false;
       }
       case "fractional":
@@ -139,22 +158,22 @@ export function toJson(
           diagnostics.push(
             makeDiagnostic("XFER0902", ORIGIN, ORIGIN, `${v.lexeme} at ${where(pointer)}`),
           );
-          out.push("null");
+          put("null");
         } else {
-          out.push(v.lexeme.replaceAll("_", ""));
+          put(v.lexeme.replaceAll("_", ""));
         }
         return false;
       case "bool":
-        out.push(v.value ? "true" : "false");
+        put(v.value ? "true" : "false");
         return false;
       case "null":
-        out.push("null");
+        put("null");
         return false;
       case "symbol":
         if (symbols++ === 0) {
           firstSymbol = pointer;
         }
-        out.push(quote(v.name));
+        put(quote(v.name));
         return false;
       case "date":
       case "time":
@@ -163,7 +182,7 @@ export function toJson(
         if (temporals++ === 0) {
           firstTemporal = pointer;
         }
-        out.push(quote(v.lexeme));
+        put(quote(v.lexeme));
         return false;
       default:
         throw new TypeError(
@@ -173,27 +192,41 @@ export function toJson(
   };
 
   emit(value, "");
-  while (stack.length > 0) {
+  while (stack.length > 0 && !tooLong) {
     const frame = stack[stack.length - 1] as Frame;
     const depth = stack.length;
     if (frame.next === frame.kids.length) {
       stack.pop();
-      out.push(newline(depth - 1), frame.container.kind === "object" ? "}" : "]");
+      put(newline(depth - 1), frame.container.kind === "object" ? "}" : "]");
       continue;
     }
     const index = frame.next++;
     if (index > 0) {
-      out.push(",");
+      put(",");
     }
-    out.push(newline(depth));
+    put(newline(depth));
     let step: string;
     if (frame.container.kind === "object") {
       step = pointerToken(frame.keys[index] as string);
-      out.push(quote(frame.keys[index] as string), indent === 0 ? ":" : ": ");
+      put(quote(frame.keys[index] as string), indent === 0 ? ":" : ": ");
     } else {
       step = String(index);
     }
     emit(frame.kids[index] as XferValue, `${frame.pointer}/${step}`);
+  }
+
+  if (tooLong) {
+    return {
+      text: undefined,
+      diagnostics: [
+        makeDiagnostic(
+          "XFER0601",
+          ORIGIN,
+          ORIGIN,
+          `the JSON text is longer than ${maxChars} characters`,
+        ),
+      ],
+    };
   }
 
   if (symbols > 0) {
