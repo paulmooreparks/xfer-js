@@ -282,7 +282,9 @@ describe("keys and values in objects", () => {
     const [d] = parse(`{ "${key}" 1 x }`).diagnostics;
     expect(d?.code).toBe("XFER0404");
     // The message is well-formed text: no lone surrogate where the key was cut.
-    expect(d?.message.isWellFormed()).toBe(true);
+    expect(d?.message).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
     expect(d?.message).toContain(`${"😀".repeat(10)}...`);
   });
 
