@@ -26,7 +26,7 @@ xfer-js/
   vitest.config.ts
   .changeset/
   .github/workflows/ci.yml
-  .github/workflows/release.yml
+  .github/workflows/release.yaml
   LICENSE                       MIT
   README.md
   SECURITY.md
@@ -503,7 +503,7 @@ Each of these is a spec change to make in the `xferlang` repository in the same 
 - **Build:** `tsdown` producing `dist/index.js` (ESM, since the package is `"type": "module"`), `dist/index.cjs`, `dist/index.d.ts`, `dist/index.d.cts`, and `dist/cli.mjs` (ESM only, with the shebang banner and the executable bit). The core size is measured by `size-limit` as minified bytes with no compression (the stricter reading of the budget); budget 40 kB, raised from 20 kB when the parser landed (section 16), to be tightened to the measured size plus ten percent in step 9.
 - **Lint and format:** `biome` with the recommended rules plus `noExplicitAny: error`; `npm run check` runs biome, `tsc --noEmit`, and the tests.
 - **CI (`ci.yml`):** on push and pull request; matrix Node 22, 24 × ubuntu, windows, macos: install with `npm ci`, `npm run check`, `npm run build`, `npm run test:cli`, `size-limit`. Node 22 is the floor because the build and test tools require it (tsdown needs 22.18 or later, Vitest 22.12 or later), so the full check cannot run on older Node. Runtime compatibility on older Node is a separate job added in step 9: it builds on Node 24, then runs the built `dist` on Node 18 and 20 with a plain `node:test` runner that executes the conformance cases without Vitest. Also a `deno` job (`deno test` importing `dist/index.js` and running the conformance cases through a small Deno-side runner) and a `bun` job (`bun test` the same). Submodule checked out with `submodules: true`.
-- **Release (`release.yml`):** on push to `main`, changesets opens or updates the version pull request; merging it runs `npm publish --provenance --access public` under an OIDC trusted publisher (no long-lived token), tags `v<version>`, and attaches `CHANGELOG.md` section to the GitHub release. Prereleases use changesets' `pre` mode with tag `next`.
+- **Release (`release.yaml`):** on push to `main`, changesets opens or updates the version pull request; merging it runs `npm publish --provenance --access public` under an OIDC trusted publisher (no long-lived token), tags `v<version>`, and attaches `CHANGELOG.md` section to the GitHub release. Prereleases use changesets' `pre` mode with tag `next`.
 - **Docs:** README with the thirty-second example, the JSON mapping on the first screen, the API on one page, and links to the spec and the site; `typedoc` to `docs/` published by Pages.
 - **Security:** `SECURITY.md` with the disclosure address; `npm audit` in CI for dev dependencies only (there are no runtime ones).
 
@@ -544,7 +544,7 @@ Step 1 (scaffold) was completed on 2026-10-18. The decisions it required, and th
 - **`package.json` is `private: true`** until the first release (step 10), so an accidental publish is impossible. Remove it in that step.
 - **GitHub repositories created 2026-10-18,** both public: `paulmooreparks/xferlang` and `paulmooreparks/xfer-js`, default branch `master`. `.gitmodules` records the GitHub URL of the spec repository and the local clone was synced to it. The spec repository is public, so CI checks out the submodule with no token. The first CI run passed on all six matrix legs (Ubuntu, Windows and macOS, Node 22 and 24).
 - **GitHub Actions versions.** The workflow used `actions/checkout@v4` and `actions/setup-node@v4`, which GitHub reported as the deprecated Node 20 runtime. Both are now `@v7`, the latest majors on 2026-10-18. Watch for the `ubuntu-latest` label migrating to Ubuntu 26 on 2026-10-19; nothing in the workflow depends on the image version.
-- **`release.yml` is deferred** to step 9 or 10, because it cannot be tested before there is something to publish, and it needs npm trusted publishing configured on the registry side.
+- **`release.yaml` is deferred** to step 9 or 10, because it cannot be tested before there is something to publish, and it needs npm trusted publishing configured on the registry side.
 - **Contact in `SECURITY.md`** is paul@parkscomputing.com, taken from the legacy project's README.
 - **The `xferlang` spec repository gained its `LICENSE` file** (the README already claimed MIT).
 
@@ -667,5 +667,7 @@ Tests added for each, plus exact-diagnostic-list tests, a Unicode property test,
 - **Runtime floor:** `engines` stays `>=18` on the strength of those jobs; if the Node 18 leg fails, the floor moves to 20 and the README says so.
 - **typedoc:** `npm run docs` builds `docs/` (ignored by git and Biome); the `check` job builds it with warnings as errors. Publishing it to Pages is left until the site exists.
 - **Size budget:** 45 kB (measured 40.46 kB, plus about ten percent).
-- **`release.yml`:** changesets opens the version pull request and publishes with provenance under npm trusted publishing. It cannot succeed until the package is no longer `private` and the npm side is configured (step 10, which needs Paul).
+- **`release.yaml`:** changesets opens the version pull request and publishes with provenance under npm trusted publishing. It cannot succeed until the package is no longer `private` and the npm side is configured (step 10, which needs Paul).
 - **README** rewritten for users, with the example document checked against the parser.
+
+The release workflow file is `release.yaml`, not `release.yml`: npm's trusted publisher entry matches the workflow file name exactly, and the entry was saved with the `.yaml` spelling. Changesets CLI 3 stores pending pre-release changesets under `.changeset/pre/`, which `changesets/action@v1` cannot read, so the workflow uses `@v2` (whose inputs are `version-script`, `publish-script`, `pr-title` and `commit-message`).
