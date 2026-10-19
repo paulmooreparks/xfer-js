@@ -42,6 +42,11 @@ export const DIAGNOSTICS = {
   XFER0604: { severity: "error", summary: "delimiter run exceeds length limit" },
   XFER0605: { severity: "error", summary: "element count exceeds limit" },
   XFER0701: { severity: "error", summary: "invalid UTF-8" },
+  // Object mappers (specification 9). This package has no mapper, but the table is the spec's.
+  XFER0801: { severity: "error", summary: "value has the wrong kind for its target" },
+  XFER0802: { severity: "error", summary: "key matches no member of the target" },
+  XFER0803: { severity: "error", summary: "required member missing" },
+  XFER0804: { severity: "error", summary: "two keys match one member" },
   XFER0901: { severity: "warning", summary: "integer outside JSON's safe range" },
   XFER0902: { severity: "error", summary: "special float has no JSON mapping" },
   XFER0903: { severity: "info", summary: "symbol mapped to JSON string" },
