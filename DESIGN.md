@@ -689,3 +689,12 @@ Done 2026-10-21. The roadmap's M1 exit asks for CI green with the suite pinned a
 
 - **The suite is pinned at `v1.0.0-draft.1`** (xferlang `4788b52`, the specification's "version 1.0, draft 1" with the JSON output bound of 8.1). It was pinned at the untagged `dffcd6b` before. xfer-dotnet pins the same tag.
 - **Browsers:** the smoke checks moved into `smoke/checks.mjs`, which takes the package and two readers and has no file system, so `smoke/run.mjs` (Node, Deno, Bun) and the new `smoke/browser.mjs` run the same 410 checks. The browser runner serves the repository on a loopback port, loads the built package and the checks as ES modules in Chromium, Firefox and WebKit through Playwright (1.63.0, a development dependency only), and reads the suite over HTTP. A `browsers` CI job runs each browser on its own. All three passed every check locally (Chromium 153, Firefox 155, WebKit 26.6).
+
+### The CLI as a function
+
+Done 2026-10-22, for xfer.parkscomputing.com, where `xfer` in the site's terminal is to be the npm CLI itself (xferlang `history/XFER_SITE_DESIGN.md`, section 9).
+
+- **`cli/run.ts`** holds the whole command line as `runCli(args, host)`, which returns the exit status and does every read and write through a `CliHost`: `readFile` and `readStdin` (bytes or text), `writeFile` for `fmt --write`, `stdout`, `stderr`, and the version `--version` prints. It has no Node dependency. `cli/main.ts` is now only the Node host: the file system, the process's streams, the version from `package.json`, and the handlers that make a failed write to standard output or error exit 2.
+- **Published as `xferlang/cli`,** built beside `index` in the neutral, typed build, so a browser imports it as an ES module. The two entries share one chunk, and the size budget, which follows imports, still measures 40.93 kB.
+- **Text where a host keeps text.** A browser terminal's files are strings, so `readFile` may give a string: `parse` takes either, `from-json` drops a leading U+FEFF from a string as TextDecoder drops the byte order mark from bytes, and `fmt --write` compares a string input with the output as text.
+- **Unchanged behaviour,** checked by the xfer-dotnet differential tests (all eight, the stream, `--write` and legacy-sample cases included) against the rebuilt CLI, and by `test/cli-run.test.ts`, which runs `runCli` with files held in memory as a browser terminal would.
