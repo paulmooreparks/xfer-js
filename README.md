@@ -71,6 +71,21 @@ xfer from-json < data.json
 
 With no file, or with `-`, input is read from standard input. The exit status is 0 for success, 1 if any document had an error, and 2 for a usage error or an unreadable file. `--json` prints diagnostics as one JSON object per line.
 
+The same command line runs anywhere as a function, with the files and streams supplied by the caller, which is how a terminal in a web page runs the real `xfer`:
+
+```ts
+import { runCli } from "xferlang/cli";
+
+const status = await runCli(["fmt", "a.xfer"], {
+  readFile: async (name) => myFiles.get(name),   // bytes or text
+  readStdin: async () => "",
+  writeFile: async (name, text) => myFiles.set(name, text),
+  stdout: (text) => print(text),
+  stderr: (text) => printError(text),
+  version: "my-terminal",
+});
+```
+
 ## Development
 
 Clone with submodules, then install and check:
