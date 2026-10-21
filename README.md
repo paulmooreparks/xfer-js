@@ -83,9 +83,10 @@ npm run check        # lint, typecheck, tests
 npm run build
 npm run test:cli     # needs the build
 npm run smoke        # the built package against the suite, with no test framework
+npm run smoke:browser   # the same in Chromium, Firefox and WebKit (npx playwright install first)
 ```
 
-Building and testing need Node 22 or later, because the build and test tools require it. The built package is also checked on Node 18 and 20, Deno and Bun in CI. [DESIGN.md](DESIGN.md) describes how the package is built and records the decisions made along the way.
+Building and testing need Node 22 or later, because the build and test tools require it. The built package is also checked on Node 18 and 20, Deno and Bun, and in Chromium, Firefox and WebKit, in CI. [DESIGN.md](DESIGN.md) describes how the package is built and records the decisions made along the way.
 
 ## Licence
 

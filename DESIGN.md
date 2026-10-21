@@ -682,3 +682,10 @@ The xfer-dotnet differential test compares this CLI with the .NET one byte for b
 - **The CLI writes each file's output as soon as it is made,** so no string holds the output of several files; three 1.8 MB documents through one `fmt` no longer fail.
 - **A failed write is exit 2.** On an `error` event from standard output (a reader that went away, a full disk) the CLI prints `xfer: cannot write standard output` once and exits 2; on one from standard error it exits 2. The event may arrive after `main` has returned, so the handlers set the exit code and `main`'s code yields to it.
 - **The contract with xfer-dotnet** does not cover standard streams that are closed before the CLI starts (Node reopens them on `/dev/null`, which is not documented and not what .NET does), or Windows file names that are not ordinary paths to a regular file (trailing separators, dots or spaces, and device names, where libuv and .NET differ).
+
+### Closing milestone M1: the tagged suite and browsers
+
+Done 2026-10-21. The roadmap's M1 exit asks for CI green with the suite pinned at a tagged commit of `xferlang`, and for the package to run in a browser as well as on Node, Deno and Bun. Neither was met until now.
+
+- **The suite is pinned at `v1.0.0-draft.1`** (xferlang `4788b52`, the specification's "version 1.0, draft 1" with the JSON output bound of 8.1). It was pinned at the untagged `dffcd6b` before. xfer-dotnet pins the same tag.
+- **Browsers:** the smoke checks moved into `smoke/checks.mjs`, which takes the package and two readers and has no file system, so `smoke/run.mjs` (Node, Deno, Bun) and the new `smoke/browser.mjs` run the same 410 checks. The browser runner serves the repository on a loopback port, loads the built package and the checks as ES modules in Chromium, Firefox and WebKit through Playwright (1.63.0, a development dependency only), and reads the suite over HTTP. A `browsers` CI job runs each browser on its own. All three passed every check locally (Chromium 153, Firefox 155, WebKit 26.6).
