@@ -1,6 +1,6 @@
 {
   "name": "xferlang",
-  "version": "0.1.0-next.4",
+  "version": "0.1.0-next.5",
   "description": "XferLang 1.0 for JavaScript and TypeScript: a data format with no escape sequences, typed values and line-independent syntax. Parser, canonical writer, JSON mapping and command line tool.",
   "license": "MIT",
   "author": "Paul M. Parks",
