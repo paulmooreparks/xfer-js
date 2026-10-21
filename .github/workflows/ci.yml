@@ -88,3 +88,25 @@ jobs:
         run: deno run -A smoke/run.mjs
       - if: matrix.runtime == 'bun'
         run: bun smoke/run.mjs
+
+  # The same checks in real browsers (smoke/browser.mjs): the package loaded as an ES module,
+  # the suite read over HTTP from a loopback server.
+  browsers:
+    name: built package in ${{ matrix.browser }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: node smoke/browser.mjs ${{ matrix.browser }}
